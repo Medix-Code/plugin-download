@@ -222,11 +222,6 @@ export function createPopupActions(state, elements, renderer, logs) {
     return `${DOWNLOADS_SUBDIRECTORY}/analisi_bloc_${stamp}.json`;
   }
 
-  function buildTemplateFilename() {
-    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    return `${DOWNLOADS_SUBDIRECTORY}/plantilla_mockup_${stamp}.json`;
-  }
-
   function getAnalysisEditorText() {
     if (!elements.analysisOutput) {
       return "";
@@ -805,28 +800,6 @@ export function createPopupActions(state, elements, renderer, logs) {
     return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
   }
 
-  function getTemplatePayload() {
-    const analysis = getCurrentAnalysisObject({
-      reportErrors: true,
-      operation: "exportar la plantilla",
-    });
-    if (!analysis) {
-      return null;
-    }
-
-    const template = resolveTemplateFromAnalysisObject(analysis);
-    if (!template) {
-      elements.statusMessage.textContent =
-        "El JSON actual no te prou dades per generar plantilla.";
-      logs.push("error", "No s'ha pogut exportar la plantilla.", {
-        message: "JSON sense capes ni base de plantilla",
-      });
-      return null;
-    }
-
-    return JSON.stringify(template, null, 2);
-  }
-
   function getTemplateObject() {
     const analysis = getCurrentAnalysisObject({
       reportErrors: true,
@@ -1164,7 +1137,6 @@ export function createPopupActions(state, elements, renderer, logs) {
       renderer.renderAnalysisSvgPreview();
       elements.copyAnalysisButton.disabled = true;
       elements.saveAnalysisButton.disabled = true;
-      elements.saveTemplateButton.disabled = true;
       elements.downloadBlockBundleButton.disabled = true;
       return;
     }
@@ -1177,12 +1149,10 @@ export function createPopupActions(state, elements, renderer, logs) {
       state.elementSvgPreviewUrl = "";
       renderer.renderAnalysisDetectedAssets([]);
       renderer.renderAnalysisSvgPreview();
-      elements.saveTemplateButton.disabled = true;
       elements.downloadBlockBundleButton.disabled = true;
       return;
     }
 
-    elements.saveTemplateButton.disabled = false;
     elements.downloadBlockBundleButton.disabled = false;
 
     const template = resolveTemplateFromAnalysisObject(parsed);
@@ -1242,42 +1212,6 @@ export function createPopupActions(state, elements, renderer, logs) {
     } catch (error) {
       elements.statusMessage.textContent = "No s'ha pogut guardar l'analisi.";
       debugError("error guardant analisi", error);
-      logs.reportError(elements.statusMessage.textContent, error);
-    } finally {
-      setTimeout(() => {
-        URL.revokeObjectURL(objectUrl);
-      }, 1200);
-    }
-  }
-
-  async function saveMockupTemplate() {
-    const payload = getTemplatePayload();
-
-    if (!payload) {
-      elements.statusMessage.textContent = "No hi ha cap analisi per exportar plantilla.";
-      return;
-    }
-
-    const blob = new Blob([payload], { type: "application/json" });
-    const objectUrl = URL.createObjectURL(blob);
-
-    try {
-      const downloadId = await chrome.downloads.download({
-        url: objectUrl,
-        filename: buildTemplateFilename(),
-        conflictAction: "uniquify",
-        saveAs: false,
-      });
-
-      if (!Number.isInteger(downloadId)) {
-        throw new Error("Chrome no ha retornat cap downloadId.");
-      }
-
-      elements.statusMessage.textContent =
-        "Plantilla mockup guardada a Downloads/Image Picker/.";
-    } catch (error) {
-      elements.statusMessage.textContent = "No s'ha pogut guardar la plantilla mockup.";
-      debugError("error guardant plantilla mockup", error);
       logs.reportError(elements.statusMessage.textContent, error);
     } finally {
       setTimeout(() => {
@@ -1366,7 +1300,6 @@ export function createPopupActions(state, elements, renderer, logs) {
     analyzeElement,
     copyElementAnalysis,
     saveElementAnalysis,
-    saveMockupTemplate,
     downloadBlockBundle,
     handleAnalysisEditorInput,
     clearElementAnalysis,

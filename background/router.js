@@ -12,8 +12,12 @@ import {
 } from "./capture/index.js";
 import {
   buildExpandedPopupUrl,
+  closeExtensionPopupWindows,
   createFallbackExpandedWindow,
   createMaximizedExpandedWindow,
+  refreshExtensionPopupWindows,
+  trackExtensionPopupWindow,
+  untrackExtensionPopupWindow,
 } from "./windows/index.js";
 
 function hasValidSelection(message) {
@@ -50,6 +54,39 @@ async function openExpandedWindowFromContext(tabId, windowId, options = {}) {
 }
 
 export function startBackgroundRouter() {
+  chrome.windows.onRemoved.addListener((windowId) => {
+    untrackExtensionPopupWindow(windowId).catch(() => {});
+  });
+
+  chrome.runtime.onInstalled.addListener((details) => {
+    if (details?.reason !== "update") {
+      return;
+    }
+
+    refreshExtensionPopupWindows()
+      .then(({ refreshedCount }) => {
+        if (refreshedCount > 0) {
+          emitPluginLog("info", "Finestra del plugin actualitzada automaticament.", {
+            refreshedCount,
+            previousVersion: details?.previousVersion || "",
+          });
+          return;
+        }
+
+        return closeExtensionPopupWindows().then(({ closedCount }) => {
+          if (closedCount > 0) {
+            emitPluginLog("info", "Finestra del plugin tancada automaticament despres d'actualitzar.", {
+              closedCount,
+              previousVersion: details?.previousVersion || "",
+            });
+          }
+        });
+      })
+      .catch((error) => {
+        debugError("no s'han pogut tancar finestres obertes en actualitzar", error);
+      });
+  });
+
   chrome.action.onClicked.addListener((tab) => {
     if (!isInteger(tab?.id) || !isInteger(tab?.windowId)) {
       emitPluginLog("warn", "No s'ha pogut obrir la finestra gran des de la toolbar.", {
@@ -66,6 +103,7 @@ export function startBackgroundRouter() {
       upscaleFactor: 2,
     })
       .then((createdWindow) => {
+        trackExtensionPopupWindow(createdWindow.id).catch(() => {});
         debugLog("finestra gran oberta des de toolbar", {
           sourceTabId: tab.id,
           sourceWindowId: tab.windowId,
@@ -309,7 +347,8 @@ export function startBackgroundRouter() {
         upscaleFactor: message.upscaleFactor === 4 ? 4 : 2,
         saveAs: message.saveAs === true,
       })
-        .then((createdWindow) => {
+      .then((createdWindow) => {
+          trackExtensionPopupWindow(createdWindow.id).catch(() => {});
           debugLog("finestra gran oberta", {
             windowId: createdWindow.id,
             state: createdWindow.state,

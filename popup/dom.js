@@ -29,7 +29,6 @@ export const elements = {
   analysisAssetList: document.getElementById("analysisAssetList"),
   copyAnalysisButton: document.getElementById("copyAnalysisButton"),
   saveAnalysisButton: document.getElementById("saveAnalysisButton"),
-  saveTemplateButton: document.getElementById("saveTemplateButton"),
   downloadBlockBundleButton: document.getElementById("downloadBlockBundleButton"),
   clearAnalysisButton: document.getElementById("clearAnalysisButton"),
   logList: document.getElementById("logList"),

@@ -91,10 +91,6 @@ elements.saveAnalysisButton.addEventListener("click", () => {
   actions.saveElementAnalysis();
 });
 
-elements.saveTemplateButton.addEventListener("click", () => {
-  actions.saveMockupTemplate();
-});
-
 elements.analysisOutput.addEventListener("input", () => {
   actions.handleAnalysisEditorInput();
 });

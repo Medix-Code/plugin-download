@@ -274,7 +274,6 @@ export function createRenderer(state, elements) {
     elements.analysisPanel.hidden = false;
     elements.copyAnalysisButton.disabled = false;
     elements.saveAnalysisButton.disabled = false;
-    elements.saveTemplateButton.disabled = false;
     elements.downloadBlockBundleButton.disabled = false;
     elements.clearAnalysisButton.disabled = false;
   }
@@ -291,7 +290,6 @@ export function createRenderer(state, elements) {
     elements.analysisPanel.hidden = true;
     elements.copyAnalysisButton.disabled = true;
     elements.saveAnalysisButton.disabled = true;
-    elements.saveTemplateButton.disabled = true;
     elements.downloadBlockBundleButton.disabled = true;
     elements.clearAnalysisButton.disabled = true;
   }
