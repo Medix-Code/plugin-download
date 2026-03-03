@@ -207,6 +207,284 @@ function parseSvgDocument(svgText) {
   };
 }
 
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function prefixSvgFragmentIds(fragment, prefix) {
+  const source = String(fragment || "");
+  if (!source || !/\bid\s*=\s*["']/i.test(source)) {
+    return source;
+  }
+
+  const idMatches = [...source.matchAll(/\bid\s*=\s*(?:"([^"]+)"|'([^']+)')/gi)];
+  const uniqueIds = [...new Set(idMatches.map((match) => match[1] || match[2] || "").filter(Boolean))];
+  if (uniqueIds.length === 0) {
+    return source;
+  }
+
+  let output = source;
+
+  for (const rawId of uniqueIds) {
+    const fromId = String(rawId);
+    const toId = `${prefix}_${fromId}`;
+    const escapedId = escapeRegExp(fromId);
+
+    output = output.replace(
+      new RegExp(`\\bid\\s*=\\s*(["'])${escapedId}\\1`, "g"),
+      `id="${toId}"`,
+    );
+    output = output.replace(
+      new RegExp(`url\\(\\s*#${escapedId}\\s*\\)`, "g"),
+      `url(#${toId})`,
+    );
+    output = output.replace(
+      new RegExp(`\\bhref\\s*=\\s*(["'])#${escapedId}\\1`, "g"),
+      `href="#${toId}"`,
+    );
+    output = output.replace(
+      new RegExp(`\\bxlink:href\\s*=\\s*(["'])#${escapedId}\\1`, "g"),
+      `xlink:href="#${toId}"`,
+    );
+  }
+
+  return output;
+}
+
+function flattenSvgSymbolUse(svgText) {
+  const source = String(svgText || "").trim();
+  if (!source || !/<symbol\b/i.test(source) || !/<use\b/i.test(source)) {
+    return source;
+  }
+
+  const symbolMap = new Map();
+  const symbolPattern = /<symbol\b([^>]*)>([\s\S]*?)<\/symbol>/gi;
+  let symbolMatch;
+
+  while ((symbolMatch = symbolPattern.exec(source))) {
+    const rawAttributes = symbolMatch[1] || "";
+    const body = (symbolMatch[2] || "").trim();
+    const id = extractAttributeValue(rawAttributes, "id");
+    const viewBox = extractAttributeValue(rawAttributes, "viewBox");
+
+    if (!id || !body) {
+      continue;
+    }
+
+    symbolMap.set(`#${id}`, {
+      body,
+      viewBox,
+      parsedViewBox: parseSvgViewBox(viewBox),
+    });
+  }
+
+  if (symbolMap.size === 0) {
+    return source;
+  }
+
+  let flattenedCount = 0;
+  return source.replace(/<use\b([^>]*?)(?:\/>|><\/use>)/gi, (fullMatch, rawAttributes) => {
+    const href =
+      extractAttributeValue(rawAttributes, "href") ||
+      extractAttributeValue(rawAttributes, "xlink:href");
+
+    if (!href || !href.startsWith("#")) {
+      return fullMatch;
+    }
+
+    const symbol = symbolMap.get(href);
+    if (!symbol) {
+      return fullMatch;
+    }
+
+    flattenedCount += 1;
+    const prefixedBody = prefixSvgFragmentIds(symbol.body, `flat_${flattenedCount}`);
+
+    const x = extractAttributeValue(rawAttributes, "x");
+    const y = extractAttributeValue(rawAttributes, "y");
+    const width = parseSvgLength(extractAttributeValue(rawAttributes, "width"));
+    const height = parseSvgLength(extractAttributeValue(rawAttributes, "height"));
+    const transform = extractAttributeValue(rawAttributes, "transform");
+    const preserveAspectRatio = extractAttributeValue(rawAttributes, "preserveAspectRatio");
+
+    const transforms = [];
+    if (x || y) {
+      transforms.push(`translate(${x || "0"} ${y || "0"})`);
+    }
+
+    if (
+      symbol.parsedViewBox &&
+      Number.isFinite(width) &&
+      Number.isFinite(height) &&
+      symbol.parsedViewBox.width > 0 &&
+      symbol.parsedViewBox.height > 0
+    ) {
+      const scaleX = width / symbol.parsedViewBox.width;
+      const scaleY = height / symbol.parsedViewBox.height;
+
+      if (
+        Number.isFinite(scaleX) &&
+        Number.isFinite(scaleY) &&
+        (Math.abs(scaleX - 1) > 0.000001 || Math.abs(scaleY - 1) > 0.000001)
+      ) {
+        transforms.push(`scale(${scaleX} ${scaleY})`);
+      }
+
+      if (symbol.parsedViewBox.minX !== 0 || symbol.parsedViewBox.minY !== 0) {
+        transforms.push(`translate(${-symbol.parsedViewBox.minX} ${-symbol.parsedViewBox.minY})`);
+      }
+    }
+
+    if (transform) {
+      transforms.push(transform);
+    }
+
+    const groupAttrs = [
+      buildOptionalAttribute("id", extractAttributeValue(rawAttributes, "id")),
+      buildOptionalAttribute("class", extractAttributeValue(rawAttributes, "class")),
+      buildOptionalAttribute("style", extractAttributeValue(rawAttributes, "style")),
+      buildOptionalAttribute("filter", extractAttributeValue(rawAttributes, "filter")),
+      buildOptionalAttribute("clip-path", extractAttributeValue(rawAttributes, "clip-path")),
+      buildOptionalAttribute("mask", extractAttributeValue(rawAttributes, "mask")),
+      buildOptionalAttribute("opacity", extractAttributeValue(rawAttributes, "opacity")),
+      buildOptionalAttribute("fill", extractAttributeValue(rawAttributes, "fill")),
+      buildOptionalAttribute("stroke", extractAttributeValue(rawAttributes, "stroke")),
+      buildOptionalAttribute("stroke-width", extractAttributeValue(rawAttributes, "stroke-width")),
+      buildOptionalAttribute("stroke-linecap", extractAttributeValue(rawAttributes, "stroke-linecap")),
+      buildOptionalAttribute("stroke-linejoin", extractAttributeValue(rawAttributes, "stroke-linejoin")),
+      buildOptionalAttribute(
+        "stroke-miterlimit",
+        extractAttributeValue(rawAttributes, "stroke-miterlimit"),
+      ),
+      buildOptionalAttribute("preserveAspectRatio", preserveAspectRatio),
+      transforms.length > 0 ? buildOptionalAttribute("transform", transforms.join(" ")) : "",
+    ]
+      .filter(Boolean)
+      .join("");
+
+    return `<g${groupAttrs}>${prefixedBody}</g>`;
+  });
+}
+
+function buildOptionalAttribute(name, value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) {
+    return "";
+  }
+  return ` ${name}="${escapeXml(normalized)}"`;
+}
+
+function parseRotationDegreesFromTransform(transformValue) {
+  const raw = String(transformValue || "").trim();
+  if (!raw || raw === "none") {
+    return 0;
+  }
+
+  const matrixMatch = raw.match(/^matrix\(([^)]+)\)$/i);
+  if (!matrixMatch) {
+    return 0;
+  }
+
+  const parts = matrixMatch[1]
+    .split(",")
+    .map((part) => Number.parseFloat(part.trim()));
+  if (parts.length < 4 || parts.some((value) => !Number.isFinite(value))) {
+    return 0;
+  }
+
+  const [a, b] = parts;
+  const angle = (Math.atan2(b, a) * 180) / Math.PI;
+  return Number.isFinite(angle) ? angle : 0;
+}
+
+function parseAffineTransformFromCss(transformValue) {
+  const raw = String(transformValue || "").trim();
+  if (!raw || raw === "none") {
+    return null;
+  }
+
+  const matrixMatch = raw.match(/^matrix\(([^)]+)\)$/i);
+  if (matrixMatch) {
+    const parts = matrixMatch[1]
+      .split(",")
+      .map((part) => Number.parseFloat(part.trim()));
+    if (parts.length === 6 && parts.every((value) => Number.isFinite(value))) {
+      const [a, b, c, d, e, f] = parts;
+      return { a, b, c, d, e, f, perspective: false };
+    }
+    return null;
+  }
+
+  const matrix3dMatch = raw.match(/^matrix3d\(([^)]+)\)$/i);
+  if (!matrix3dMatch) {
+    return null;
+  }
+
+  const parts = matrix3dMatch[1]
+    .split(",")
+    .map((part) => Number.parseFloat(part.trim()));
+  if (parts.length !== 16 || parts.some((value) => !Number.isFinite(value))) {
+    return null;
+  }
+
+  const [
+    m11, m12, m13, m14,
+    m21, m22, m23, m24,
+    m31, m32, m33, m34,
+    m41, m42, m43, m44,
+  ] = parts;
+  const perspective =
+    Math.abs(m13) > 1e-9 ||
+    Math.abs(m14) > 1e-9 ||
+    Math.abs(m23) > 1e-9 ||
+    Math.abs(m24) > 1e-9 ||
+    Math.abs(m31) > 1e-9 ||
+    Math.abs(m32) > 1e-9 ||
+    Math.abs(m34) > 1e-9 ||
+    Math.abs(m43) > 1e-9 ||
+    Math.abs(m33 - 1) > 1e-6 ||
+    Math.abs(m44 - 1) > 1e-6;
+
+  return {
+    a: m11,
+    b: m12,
+    c: m21,
+    d: m22,
+    e: m41,
+    f: m42,
+    perspective,
+  };
+}
+
+function getUnrotatedRectFromBoundingBox(rect, angleDeg) {
+  const angle = (Math.abs(angleDeg) * Math.PI) / 180;
+  const cos = Math.abs(Math.cos(angle));
+  const sin = Math.abs(Math.sin(angle));
+  const denominator = cos * cos - sin * sin;
+
+  if (Math.abs(denominator) < 1e-6) {
+    return null;
+  }
+
+  const rawW = (rect.width * cos - rect.height * sin) / denominator;
+  const rawH = (rect.height * cos - rect.width * sin) / denominator;
+  if (!Number.isFinite(rawW) || !Number.isFinite(rawH) || rawW <= 0 || rawH <= 0) {
+    return null;
+  }
+
+  const centerX = rect.x + rect.width / 2;
+  const centerY = rect.y + rect.height / 2;
+  const width = Math.abs(rawW);
+  const height = Math.abs(rawH);
+
+  return {
+    x: centerX - width / 2,
+    y: centerY - height / 2,
+    width,
+    height,
+  };
+}
+
 function getEmbeddedSvgAsset({
   href,
   idPrefix,
@@ -240,6 +518,7 @@ function getEmbeddedSvgAsset({
   const info = {
     symbolId,
     viewBox: parsed.viewBox,
+    body: parsed.body,
   };
   embeddedSvgRegistry.set(key, info);
   return info;
@@ -363,6 +642,13 @@ function extractLayerNameHint(layer, fallbackIndex = 0) {
   return `item${fallbackIndex + 1}`;
 }
 
+function buildLayerTreeLabel(layer, index, role = "layer") {
+  const order = String(index + 1).padStart(2, "0");
+  const hint = extractLayerNameHint(layer, index);
+  const roleHint = sanitizeArchiveSegment(String(role || "layer")).slice(0, 20) || "layer";
+  return `${order}_${hint}_${roleHint}`;
+}
+
 function resolveMappedSourceHref(rawHref, sourceToFilenameMap) {
   const source = String(rawHref || "").trim();
   if (!source) {
@@ -427,14 +713,13 @@ function buildDuplicateMaskLayerEntries(
     const opacity = Math.max(0, Math.min(1, toFiniteNumber(layer?.opacity, 1)));
     const opacityAttr = opacity < 1 ? ` opacity="${opacity}"` : "";
     const preserveAspectRatio = getMaskPreserveAspectRatio(layer?.maskSize);
-    const symbolId = `shape_${index + 1}_symbol`;
 
     const shapeDefs = [];
     const tintFilter = buildAlphaTintFilter(fill, shapeDefs, `shape_${index + 1}`);
-    shapeDefs.push(`<symbol id="${symbolId}" viewBox="${parsedMask.viewBox}">${parsedMask.body}</symbol>`);
+    const shapeBody = prefixSvgFragmentIds(parsedMask.body, `shape_${index + 1}`);
     const shapeNode = tintFilter
-      ? `<svg x="0" y="0" width="${width}" height="${height}" viewBox="${parsedMask.viewBox}" preserveAspectRatio="${preserveAspectRatio}"${opacityAttr}><use ${buildHrefAttributes(`#${symbolId}`)} filter="${tintFilter}" /></svg>`
-      : `<svg x="0" y="0" width="${width}" height="${height}" viewBox="${parsedMask.viewBox}" preserveAspectRatio="${preserveAspectRatio}"${opacityAttr}><use ${buildHrefAttributes(`#${symbolId}`)} style="fill:${escapeXml(fill)};" /></svg>`;
+      ? `<svg x="0" y="0" width="${width}" height="${height}" viewBox="${parsedMask.viewBox}" preserveAspectRatio="${preserveAspectRatio}"${opacityAttr}><g filter="${tintFilter}">${shapeBody}</g></svg>`
+      : `<svg x="0" y="0" width="${width}" height="${height}" viewBox="${parsedMask.viewBox}" preserveAspectRatio="${preserveAspectRatio}"${opacityAttr}><g style="fill:${escapeXml(fill)};">${shapeBody}</g></svg>`;
 
     const svgText = [
       '<?xml version="1.0" encoding="UTF-8"?>',
@@ -667,6 +952,18 @@ function getImagePreserveAspectRatio(objectFitValue) {
   return "none";
 }
 
+function getBackgroundPreserveAspectRatio(backgroundSizeValue) {
+  const normalized = String(backgroundSizeValue || "").toLowerCase();
+  if (normalized.includes("cover")) {
+    return "xMidYMid slice";
+  }
+  if (normalized.includes("contain")) {
+    return "xMidYMid meet";
+  }
+  // For CSS backgrounds, "meet" is a safer default than stretching.
+  return "xMidYMid meet";
+}
+
 function resolveLayerSourceHref(layer, sourceToFilenameMap) {
   const sourceFromList = getFirstKnownSource(layer?.sources, sourceToFilenameMap);
   if (sourceFromList) {
@@ -869,8 +1166,10 @@ function buildEditableMockupSvgText(template, sourceToFilenameMap, detectedPair)
   const screen = detectedPair.screen;
   const frame = detectedPair.frame;
   const contentBounds = template?.canvas?.contentBounds || {};
-  const offsetX = toFiniteNumber(contentBounds.x, 0);
-  const offsetY = toFiniteNumber(contentBounds.y, 0);
+  const rawOffsetX = toFiniteNumber(contentBounds.x, 0);
+  const rawOffsetY = toFiniteNumber(contentBounds.y, 0);
+  const offsetX = rawOffsetX > 0 ? rawOffsetX : 0;
+  const offsetY = rawOffsetY > 0 ? rawOffsetY : 0;
   const screenRect = {
     ...screen.rect,
     x: screen.rect.x - offsetX,
@@ -892,8 +1191,12 @@ function buildEditableMockupSvgText(template, sourceToFilenameMap, detectedPair)
     { allowLarge: true },
   );
   const radiusAttrs = rx > 0 || ry > 0 ? ` rx="${rx}" ry="${ry}"` : "";
-  const screenLabel = escapeXml(screen.layer?.selector || screen.layer?.id || "screen");
-  const frameLabel = escapeXml(frame.layer?.selector || frame.layer?.id || "frame");
+  const screenLabel = escapeXml(
+    buildLayerTreeLabel(screen.layer, screen.index ?? 0, "replaceable_screen"),
+  );
+  const frameLabel = escapeXml(
+    buildLayerTreeLabel(frame.layer, frame.index ?? 0, "mockup_frame"),
+  );
   const screenPreserveAspectRatio = getImagePreserveAspectRatio(screen.layer?.objectFit);
   const framePreserveAspectRatio = getImagePreserveAspectRatio(frame.layer?.objectFit);
   const title = escapeXml(template?.source?.title || "mockup editable");
@@ -931,8 +1234,10 @@ function buildTemplateSvgText(
   const layers = Array.isArray(template?.layers) ? template.layers : [];
   const { width, height } = resolveTemplateCanvasSize(template);
   const contentBounds = template?.canvas?.contentBounds || {};
-  const offsetX = toFiniteNumber(contentBounds.x, 0);
-  const offsetY = toFiniteNumber(contentBounds.y, 0);
+  const rawOffsetX = toFiniteNumber(contentBounds.x, 0);
+  const rawOffsetY = toFiniteNumber(contentBounds.y, 0);
+  const offsetX = rawOffsetX > 0 ? rawOffsetX : 0;
+  const offsetY = rawOffsetY > 0 ? rawOffsetY : 0;
 
   const sortedLayers = layers
     .map((layer, index) => ({
@@ -954,10 +1259,36 @@ function buildTemplateSvgText(
 
   for (const { layer, index } of sortedLayers) {
     const rect = layer?.rect || {};
-    const x = toFiniteNumber(rect.x, 0) - offsetX;
-    const y = toFiniteNumber(rect.y, 0) - offsetY;
-    const w = Math.max(0, toFiniteNumber(rect.width, 0));
-    const h = Math.max(0, toFiniteNumber(rect.height, 0));
+    const layerX = toFiniteNumber(rect.x, 0) - offsetX;
+    const layerY = toFiniteNumber(rect.y, 0) - offsetY;
+    const layerW = Math.max(0, toFiniteNumber(rect.width, 0));
+    const layerH = Math.max(0, toFiniteNumber(rect.height, 0));
+    const layoutW = Math.max(0, toFiniteNumber(layer?.layoutWidth, layerW));
+    const layoutH = Math.max(0, toFiniteNumber(layer?.layoutHeight, layerH));
+    const affine = parseAffineTransformFromCss(layer?.transform);
+    const rotationDeg = parseRotationDegreesFromTransform(layer?.transform);
+    let x = layerX;
+    let y = layerY;
+    let w = layerW;
+    let h = layerH;
+
+    if (Math.abs(rotationDeg) > 0.01 && !affine) {
+      const unrotated = getUnrotatedRectFromBoundingBox(
+        { x: layerX, y: layerY, width: layerW, height: layerH },
+        rotationDeg,
+      );
+      if (unrotated) {
+        x = unrotated.x;
+        y = unrotated.y;
+        w = unrotated.width;
+        h = unrotated.height;
+      }
+    }
+
+    const rotateTransformAttr =
+      Math.abs(rotationDeg) > 0.01 && !affine
+        ? ` transform="rotate(${rotationDeg} ${x + w / 2} ${y + h / 2})"`
+        : "";
     if (w <= 0 || h <= 0) {
       continue;
     }
@@ -990,7 +1321,7 @@ function buildTemplateSvgText(
       continue;
     }
 
-    const label = escapeXml(layer?.selector || role);
+    const label = escapeXml(buildLayerTreeLabel(layer, index, role));
     const opacity = Math.max(0, Math.min(1, toFiniteNumber(layer?.opacity, 1)));
     const opacityAttr = opacity < 1 ? ` opacity="${opacity}"` : "";
     const dedupeKey = `${sourceHref || "none"}|${backgroundColor || "none"}|${backgroundImage || "none"}|${maskHref || "none"}|${text || "none"}|${Math.round(x)}|${Math.round(y)}|${Math.round(w)}|${Math.round(h)}|${Math.round(opacity * 1000)}`;
@@ -1039,22 +1370,22 @@ function buildTemplateSvgText(
       const canRenderVectorColoredShape =
         hasVectorMask &&
         !hasImage &&
-        Boolean(vectorMaskInfo) &&
+        Boolean(vectorMaskInfo?.body) &&
         typeof fill === "string" &&
         !fill.startsWith("url(#");
 
       if (canRenderVectorColoredShape) {
         const tintFilter = buildAlphaTintFilter(fill, defs, `${idToken}_vector`);
-        if (tintFilter) {
-          groupNodes.push(
-            `<svg x="${x}" y="${y}" width="${w}" height="${h}" viewBox="${vectorMaskInfo.viewBox}" preserveAspectRatio="${vectorMaskPreserveAspectRatio}"><use ${buildHrefAttributes(`#${vectorMaskInfo.symbolId}`)} filter="${tintFilter}" /></svg>`,
+        if (tintFilter && vectorMaskInfo?.body) {
+          const inlineBody = prefixSvgFragmentIds(
+            vectorMaskInfo.body,
+            `${idToken}_vector_inline`,
           );
-        } else {
           groupNodes.push(
-            `<svg x="${x}" y="${y}" width="${w}" height="${h}" viewBox="${vectorMaskInfo.viewBox}" preserveAspectRatio="${vectorMaskPreserveAspectRatio}"><use ${buildHrefAttributes(`#${vectorMaskInfo.symbolId}`)} style="fill:${escapeXml(fill)};" /></svg>`,
+            `<svg x="${x}" y="${y}" width="${w}" height="${h}" viewBox="${vectorMaskInfo.viewBox}" preserveAspectRatio="${vectorMaskPreserveAspectRatio}"><g filter="${tintFilter}">${inlineBody}</g></svg>`,
           );
+          backgroundRenderedAsVector = true;
         }
-        backgroundRenderedAsVector = true;
       }
 
       if (!backgroundRenderedAsVector) {
@@ -1096,7 +1427,40 @@ function buildTemplateSvgText(
     }
 
     if (hasImage) {
-      const preserveAspectRatio = getImagePreserveAspectRatio(layer?.objectFit);
+      const preserveAspectRatio =
+        role === "background"
+          ? getBackgroundPreserveAspectRatio(layer?.backgroundSize)
+          : getImagePreserveAspectRatio(layer?.objectFit);
+      let imageTransformAttr = "";
+      let imageX = x;
+      let imageY = y;
+      let imageW = w;
+      let imageH = h;
+
+      if (affine && layoutW > 0 && layoutH > 0) {
+        const dxCandidates = [
+          0,
+          affine.a * layoutW,
+          affine.c * layoutH,
+          affine.a * layoutW + affine.c * layoutH,
+        ];
+        const dyCandidates = [
+          0,
+          affine.b * layoutW,
+          affine.d * layoutH,
+          affine.b * layoutW + affine.d * layoutH,
+        ];
+        const minDx = Math.min(...dxCandidates);
+        const minDy = Math.min(...dyCandidates);
+        const tx = layerX - minDx;
+        const ty = layerY - minDy;
+
+        imageX = 0;
+        imageY = 0;
+        imageW = layoutW;
+        imageH = layoutH;
+        imageTransformAttr = ` transform="matrix(${affine.a} ${affine.b} ${affine.c} ${affine.d} ${tx} ${ty})"`;
+      }
 
       const { rx, ry } = extractRadius(layer?.borderRadius, w, h, {
         allowLarge: false,
@@ -1121,11 +1485,11 @@ function buildTemplateSvgText(
 
       if (vectorSourceAsset) {
         groupNodes.push(
-          `<svg x="${x}" y="${y}" width="${w}" height="${h}" viewBox="${vectorSourceAsset.viewBox}" preserveAspectRatio="${preserveAspectRatio}"${clipPathAttr}${layerMaskAttr}><use ${buildHrefAttributes(`#${vectorSourceAsset.symbolId}`)} /></svg>`,
+          `<svg x="${imageX}" y="${imageY}" width="${imageW}" height="${imageH}" viewBox="${vectorSourceAsset.viewBox}" preserveAspectRatio="${preserveAspectRatio}"${clipPathAttr}${layerMaskAttr}${imageTransformAttr}><use ${buildHrefAttributes(`#${vectorSourceAsset.symbolId}`)} /></svg>`,
         );
       } else {
         groupNodes.push(
-          `<image x="${x}" y="${y}" width="${w}" height="${h}" preserveAspectRatio="${preserveAspectRatio}" ${buildHrefAttributes(sourceHref)}${clipPathAttr}${layerMaskAttr} />`,
+          `<image x="${imageX}" y="${imageY}" width="${imageW}" height="${imageH}" preserveAspectRatio="${preserveAspectRatio}" ${buildHrefAttributes(sourceHref)}${clipPathAttr}${layerMaskAttr}${imageTransformAttr} />`,
         );
       }
     }
@@ -1133,23 +1497,38 @@ function buildTemplateSvgText(
     if (hasText) {
       const textColor = normalizeSvgColor(layer?.textColor) || "#111111";
       const tokens = text.split(/\s+/).filter(Boolean);
+      const explicitLines = text
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
       const textLines =
-        tokens.length >= 2 && tokens.length <= 6 ? tokens : [text];
-      const lineCount = textLines.length;
-      const rawFontSize = Math.max(10, Math.round(parsePx(layer?.fontSize, 16)));
-      const maxFontSizeByBox = Math.max(10, Math.floor((h * 0.88) / lineCount));
-      const fontSize = Math.max(10, Math.min(rawFontSize, maxFontSizeByBox));
-      const rawLineHeight = Math.max(fontSize, Math.round(parsePx(layer?.lineHeight, fontSize)));
-      const maxLineHeightByBox = Math.max(fontSize, Math.floor((h * 0.92) / lineCount));
-      const lineHeight = Math.max(fontSize, Math.min(rawLineHeight, maxLineHeightByBox));
+        explicitLines.length > 0
+          ? explicitLines
+          : tokens.length === 2
+            ? tokens
+            : [text];
+      const rawFontSize = Math.max(8, parsePx(layer?.fontSize, 16));
+      const rawLineHeight = Math.max(
+        rawFontSize,
+        parsePx(layer?.lineHeight, Math.round(rawFontSize * 1.2)),
+      );
+      const estimatedScale = h / Math.max(1, rawLineHeight * Math.max(1, textLines.length));
+      const fontScale =
+        Number.isFinite(estimatedScale) && estimatedScale > 0
+          ? Math.max(0.05, Math.min(4, estimatedScale))
+          : 1;
+      const fontSize = Math.max(8, rawFontSize * fontScale);
+      const lineHeight = Math.max(fontSize, rawLineHeight * fontScale);
       const fontWeight = escapeXml(layer?.fontWeight || "400");
       const fontFamily = escapeXml(layer?.fontFamily || "sans-serif");
+      const fontStyle = escapeXml(layer?.fontStyle || "normal");
+      const letterSpacing = parsePx(layer?.letterSpacing, 0);
       const textAlign = String(layer?.textAlign || "").toLowerCase();
       const isCenter = textAlign === "center";
       const isRight = textAlign === "right" || textAlign === "end";
       const anchor = isCenter ? "middle" : isRight ? "end" : "start";
       const textX = isCenter ? x + w / 2 : isRight ? x + w : x;
-      const firstLineY = y + lineHeight;
+      const firstLineY = y;
       const tspans = textLines
         .map((line, lineIndex) => {
           const dy = lineIndex === 0 ? 0 : lineHeight;
@@ -1158,12 +1537,12 @@ function buildTemplateSvgText(
         .join("");
 
       groupNodes.push(
-        `<text x="${textX}" y="${firstLineY}" text-anchor="${anchor}" fill="${escapeXml(textColor)}" font-size="${fontSize}" font-weight="${fontWeight}" font-family="${fontFamily}">${tspans}</text>`,
+        `<text x="${textX}" y="${firstLineY}" text-anchor="${anchor}" dominant-baseline="text-before-edge" fill="${escapeXml(textColor)}" font-size="${fontSize}" font-weight="${fontWeight}" font-style="${fontStyle}" letter-spacing="${letterSpacing}" font-family="${fontFamily}">${tspans}</text>`,
       );
     }
 
     nodes.push(
-      `<g id="${id}" data-role="${escapeXml(role)}" inkscape:label="${label}"${opacityAttr}>${groupNodes.join("")}</g>`,
+      `<g id="${id}" data-role="${escapeXml(role)}" inkscape:label="${label}"${opacityAttr}${rotateTransformAttr}>${groupNodes.join("")}</g>`,
     );
   }
 
@@ -1393,23 +1772,32 @@ export async function downloadImages(urls, options = {}) {
           }
         }
 
+        if (isSvgTemplateAsset(url, entryBlob)) {
+          try {
+            const rawSvgText = await entryBlob.text();
+            const flattenedSvgText = flattenSvgSymbolUse(rawSvgText);
+            if (/<svg[\s>]/i.test(rawSvgText)) {
+              if (archiveTemplate !== null) {
+                sourceToSvgTextMap.set(url, rawSvgText);
+                sourceToSvgTextMap.set(entryName, rawSvgText);
+              }
+            }
+            if (/<svg[\s>]/i.test(flattenedSvgText)) {
+              entryBlob = new Blob([flattenedSvgText], {
+                type: "image/svg+xml",
+              });
+            }
+          } catch {
+            // Ignore invalid SVG payloads and keep original binary as fallback.
+          }
+        }
+
         entries.push({
           name: entryName,
           bytes: new Uint8Array(await entryBlob.arrayBuffer()),
         });
         if (!sourceToFilenameMap.has(url)) {
           sourceToFilenameMap.set(url, entryName);
-        }
-        if (archiveTemplate !== null && isSvgTemplateAsset(url, processed.blob)) {
-          try {
-            const svgText = await processed.blob.text();
-            if (/<svg[\s>]/i.test(svgText)) {
-              sourceToSvgTextMap.set(url, svgText);
-              sourceToSvgTextMap.set(entryName, svgText);
-            }
-          } catch {
-            // Ignore invalid SVG payloads and keep image fallback in template export.
-          }
         }
 
         if (processed.upscaled) {

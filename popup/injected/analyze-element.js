@@ -141,28 +141,58 @@ export function selectAndAnalyzeElement() {
 
     const chunks = [];
     for (const child of node.childNodes) {
-      if (child.nodeType !== Node.TEXT_NODE) {
+      if (child.nodeType === Node.TEXT_NODE) {
+        chunks.push(child.textContent || "");
         continue;
       }
 
-      const text = normalizeWhitespace(child.textContent || "");
-      if (text) {
-        chunks.push(text);
+      if (child.nodeType === Node.ELEMENT_NODE && child instanceof Element) {
+        if (child.tagName.toLowerCase() === "br") {
+          chunks.push("\n");
+        }
       }
     }
 
-    return normalizeWhitespace(chunks.join(" ")).slice(0, 220);
+    const raw = chunks.join("");
+    if (!raw.trim()) {
+      return "";
+    }
+
+    const lines = raw
+      .split(/\r?\n/)
+      .map((line) => normalizeWhitespace(line))
+      .filter(Boolean);
+
+    return lines.join("\n").slice(0, 220);
+  }
+
+  function getNormalizedMultilineText(value) {
+    const raw = String(value || "");
+    if (!raw.trim()) {
+      return "";
+    }
+
+    const lines = raw
+      .split(/\r?\n/)
+      .map((line) => normalizeWhitespace(line))
+      .filter(Boolean);
+
+    return lines.join("\n").slice(0, 220);
   }
 
   function collectLayers(rootElement) {
     const rootRect = rootElement.getBoundingClientRect();
     const nodes = [rootElement, ...rootElement.querySelectorAll("*")].slice(0, 1200);
     const layers = [];
+    const blockedDescendants = new WeakSet();
 
     for (let index = 0; index < nodes.length; index += 1) {
       const node = nodes[index];
 
       if (!(node instanceof Element)) {
+        continue;
+      }
+      if (blockedDescendants.has(node)) {
         continue;
       }
 
@@ -179,6 +209,8 @@ export function selectAndAnalyzeElement() {
       if (nodeRect.width < 2 || nodeRect.height < 2) {
         continue;
       }
+      const computedWidth = Number.parseFloat(String(nodeStyle.width || "").replace("px", ""));
+      const computedHeight = Number.parseFloat(String(nodeStyle.height || "").replace("px", ""));
 
       const backgroundUrls = new Set();
       collectUrlsFromBackground(nodeStyle.backgroundImage, backgroundUrls);
@@ -189,11 +221,35 @@ export function selectAndAnalyzeElement() {
       }
 
       const directText = getDirectTextSnippet(node);
+      let text = directText;
+      let textStyle = nodeStyle;
+      let shouldBlockDescendants = false;
+
+      if (!text) {
+        const editableChild = node.querySelector(
+          ":scope > p[contenteditable], :scope > div[contenteditable]",
+        );
+
+        if (editableChild instanceof Element) {
+          const editableText = getNormalizedMultilineText(
+            editableChild.innerText || editableChild.textContent || "",
+          );
+
+          if (editableText) {
+            text = editableText;
+            const preferredTextNode =
+              editableChild.querySelector("span, strong, em, b, i") || editableChild;
+            textStyle = window.getComputedStyle(preferredTextNode);
+            shouldBlockDescendants = true;
+          }
+        }
+      }
+
       const hasGradient = /gradient\(/i.test(nodeStyle.backgroundImage || "");
       const hasBackgroundColor = !isTransparentColor(nodeStyle.backgroundColor);
       const hasBackgroundImage = backgroundUrls.size > 0;
       const hasImage = Boolean(imageUrl);
-      const hasText = Boolean(directText);
+      const hasText = Boolean(text);
       const isRoot = node === rootElement;
 
       if (
@@ -230,14 +286,25 @@ export function selectAndAnalyzeElement() {
         borderRadius: nodeStyle.borderRadius,
         objectFit: nodeStyle.objectFit,
         objectPosition: nodeStyle.objectPosition,
-        textColor: nodeStyle.color,
-        fontFamily: nodeStyle.fontFamily,
-        fontSize: nodeStyle.fontSize,
-        fontWeight: nodeStyle.fontWeight,
-        lineHeight: nodeStyle.lineHeight,
-        textAlign: nodeStyle.textAlign,
+        backgroundSize: nodeStyle.backgroundSize,
+        backgroundPosition: nodeStyle.backgroundPosition,
+        backgroundRepeat: nodeStyle.backgroundRepeat,
+        textColor: textStyle.color,
+        fontFamily: textStyle.fontFamily,
+        fontSize: textStyle.fontSize,
+        fontWeight: textStyle.fontWeight,
+        fontStyle: textStyle.fontStyle,
+        lineHeight: textStyle.lineHeight,
+        letterSpacing: textStyle.letterSpacing,
+        textAlign: textStyle.textAlign,
         rect: toAbsoluteRect(nodeRect),
         relativeRect: toRelativeRect(nodeRect, rootRect),
+        layoutWidth: Number.isFinite(computedWidth) && computedWidth > 0
+          ? Math.round(computedWidth * 1000) / 1000
+          : Math.round(nodeRect.width * 1000) / 1000,
+        layoutHeight: Number.isFinite(computedHeight) && computedHeight > 0
+          ? Math.round(computedHeight * 1000) / 1000
+          : Math.round(nodeRect.height * 1000) / 1000,
       };
 
       if (hasImage) {
@@ -258,10 +325,19 @@ export function selectAndAnalyzeElement() {
 
       if (nodeStyle.maskImage && nodeStyle.maskImage !== "none") {
         layer.maskImage = nodeStyle.maskImage.slice(0, 500);
+        layer.maskSize = nodeStyle.maskSize || "";
+        layer.maskPosition = nodeStyle.maskPosition || "";
+        layer.maskRepeat = nodeStyle.maskRepeat || "";
       }
 
       if (hasText) {
-        layer.text = directText;
+        layer.text = text;
+      }
+
+      if (shouldBlockDescendants) {
+        for (const descendant of node.querySelectorAll("*")) {
+          blockedDescendants.add(descendant);
+        }
       }
 
       layers.push(layer);
@@ -345,6 +421,10 @@ export function selectAndAnalyzeElement() {
         color: style.color,
         backgroundColor: style.backgroundColor,
         backgroundImage: style.backgroundImage,
+        maskImage: style.maskImage,
+        maskSize: style.maskSize,
+        maskPosition: style.maskPosition,
+        maskRepeat: style.maskRepeat,
         fontFamily: style.fontFamily,
         fontSize: style.fontSize,
         fontWeight: style.fontWeight,

@@ -7,6 +7,20 @@ import { collectImagesFromPage } from "./injected/collect-images.js";
 import { selectAndAnalyzeElement } from "./injected/analyze-element.js";
 
 export function createPopupActions(state, elements, renderer, logs) {
+  function extractFirstCssUrl(value) {
+    const raw = String(value || "").trim();
+    if (!raw) {
+      return "";
+    }
+
+    const match = raw.match(/url\((['"]?)(.*?)\1\)/i);
+    if (!match?.[2]) {
+      return "";
+    }
+
+    return match[2].trim();
+  }
+
   function isTransparentColor(value) {
     const normalized = String(value || "")
       .replace(/\s+/g, "")
@@ -29,7 +43,7 @@ export function createPopupActions(state, elements, renderer, logs) {
       return null;
     }
 
-    if (key === "backgroundImage" && trimmed === "none") {
+    if ((key === "backgroundImage" || key === "maskImage") && trimmed === "none") {
       return null;
     }
 
@@ -136,6 +150,10 @@ export function createPopupActions(state, elements, renderer, logs) {
       "color",
       "backgroundColor",
       "backgroundImage",
+      "maskImage",
+      "maskSize",
+      "maskPosition",
+      "maskRepeat",
       "fontFamily",
       "fontSize",
       "fontWeight",
@@ -209,12 +227,51 @@ export function createPopupActions(state, elements, renderer, logs) {
     return `${DOWNLOADS_SUBDIRECTORY}/plantilla_mockup_${stamp}.json`;
   }
 
-  function getAnalysisPayload() {
-    if (!state.elementAnalysis) {
+  function getAnalysisEditorText() {
+    if (!elements.analysisOutput) {
+      return "";
+    }
+
+    if (typeof elements.analysisOutput.value === "string") {
+      return elements.analysisOutput.value;
+    }
+
+    return elements.analysisOutput.textContent || "";
+  }
+
+  function getCurrentAnalysisObject(options = {}) {
+    const { reportErrors = false, operation = "utilitzar el JSON" } = options;
+    const payload = getAnalysisEditorText().trim();
+
+    if (!payload) {
       return null;
     }
 
-    return JSON.stringify(state.elementAnalysis, null, 2);
+    try {
+      const parsed = JSON.parse(payload);
+
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("El JSON ha de tenir un objecte a l'arrel.");
+      }
+
+      return parsed;
+    } catch (error) {
+      if (reportErrors) {
+        const message =
+          error instanceof Error && error.message
+            ? error.message
+            : "JSON invalid";
+        const statusText = `JSON invalid: ${message}`;
+        elements.statusMessage.textContent = statusText;
+        logs.push("error", `No s'ha pogut ${operation}.`, { message });
+      }
+      return null;
+    }
+  }
+
+  function getAnalysisPayload() {
+    const payload = getAnalysisEditorText().trim();
+    return payload || null;
   }
 
   function collectAnalysisAssetUrls(rawAnalysis, compactAnalysis) {
@@ -239,6 +296,14 @@ export function createPopupActions(state, elements, renderer, logs) {
         urls.add(layer.imageUrl);
       }
 
+      if (Array.isArray(layer?.sources)) {
+        for (const source of layer.sources) {
+          if (source) {
+            urls.add(source);
+          }
+        }
+      }
+
       if (Array.isArray(layer?.backgroundImageUrls)) {
         for (const url of layer.backgroundImageUrls) {
           if (url) {
@@ -246,9 +311,232 @@ export function createPopupActions(state, elements, renderer, logs) {
           }
         }
       }
+
+      const maskSource = extractFirstCssUrl(layer?.maskImage);
+      if (maskSource) {
+        urls.add(maskSource);
+      }
+
+      if (layer?.maskSource) {
+        urls.add(layer.maskSource);
+      }
     }
 
     return urls;
+  }
+
+  function isTemplateLike(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return false;
+    }
+
+    if (!Array.isArray(value.layers)) {
+      return false;
+    }
+
+    if (Number.isFinite(Number(value?.canvas?.width))) {
+      return true;
+    }
+
+    if (Number.isFinite(Number(value?.element?.size?.width))) {
+      return true;
+    }
+
+    return Number.isFinite(Number(value?.templateVersion));
+  }
+
+  function cloneTemplate(template) {
+    return {
+      ...template,
+      layers: Array.isArray(template?.layers)
+        ? template.layers.map((layer) => ({
+            ...layer,
+            sources: Array.isArray(layer?.sources) ? [...layer.sources] : [],
+          }))
+        : [],
+      replaceableLayers: Array.isArray(template?.replaceableLayers)
+        ? template.replaceableLayers.map((layer) => ({
+            ...layer,
+            sources: Array.isArray(layer?.sources) ? [...layer.sources] : [],
+          }))
+        : [],
+    };
+  }
+
+  function applyAssetOverridesToTemplate(baseTemplate, analysisObject) {
+    const nextTemplate = cloneTemplate(baseTemplate);
+    const imageUrls = Array.isArray(analysisObject?.assets?.imageUrls)
+      ? analysisObject.assets.imageUrls.filter(
+          (url) => typeof url === "string" && /^https?:\/\//i.test(url),
+        )
+      : [];
+
+    if (imageUrls.length === 0) {
+      return nextTemplate;
+    }
+
+    let cursor = 0;
+
+    for (const layer of nextTemplate.layers) {
+      if (
+        !Array.isArray(layer?.sources) ||
+        layer.sources.length === 0 ||
+        cursor >= imageUrls.length
+      ) {
+        continue;
+      }
+
+      layer.sources = [imageUrls[cursor]];
+      cursor += 1;
+    }
+
+    if (Array.isArray(nextTemplate.replaceableLayers)) {
+      nextTemplate.replaceableLayers = nextTemplate.replaceableLayers.map((entry) => {
+        const matchedLayer = nextTemplate.layers.find((layer) => layer?.id === entry?.id);
+        return {
+          ...entry,
+          sources: Array.isArray(matchedLayer?.sources)
+            ? [...matchedLayer.sources]
+            : Array.isArray(entry?.sources)
+              ? [...entry.sources]
+              : [],
+        };
+      });
+    }
+
+    return nextTemplate;
+  }
+
+  function getPreviewImageUrlsFromAnalysis(analysis) {
+    return getPreviewAssetItemsFromAnalysis(analysis);
+  }
+
+  function getPreviewAssetItemsFromAnalysis(rawAnalysis, compactAnalysis = rawAnalysis) {
+    if (!rawAnalysis || typeof rawAnalysis !== "object") {
+      return [];
+    }
+
+    const itemsByKey = new Map();
+    const pushItem = (key, item) => {
+      if (!key || itemsByKey.has(key)) {
+        return;
+      }
+      itemsByKey.set(key, item);
+    };
+    const addUrlItem = (url, label = "") => {
+      if (typeof url !== "string" || !/^https?:\/\//i.test(url)) {
+        return;
+      }
+      pushItem(`url:${url}`, {
+        key: `url:${url}`,
+        url,
+        previewUrl: url,
+        label,
+      });
+    };
+
+    const compactAssets = compactAnalysis?.assets || {};
+    const rawAssets = rawAnalysis?.assets || {};
+    for (const source of [
+      ...(compactAssets.imageUrls || []),
+      ...(compactAssets.backgroundImageUrls || []),
+      ...(rawAssets.imageUrls || []),
+      ...(rawAssets.backgroundImageUrls || []),
+    ]) {
+      addUrlItem(source, "asset");
+    }
+
+    const rawLayers = Array.isArray(rawAnalysis?.layers) ? rawAnalysis.layers : [];
+    for (const layer of rawLayers) {
+      if (layer?.imageUrl) {
+        addUrlItem(layer.imageUrl, "image");
+      }
+
+      if (Array.isArray(layer?.sources)) {
+        for (const source of layer.sources) {
+          addUrlItem(source, "layer");
+        }
+      }
+
+      if (Array.isArray(layer?.backgroundImageUrls)) {
+        for (const source of layer.backgroundImageUrls) {
+          addUrlItem(source, "background");
+        }
+      }
+
+      const maskUrl = extractFirstCssUrl(layer?.maskImage) || layer?.maskSource || "";
+      if (!maskUrl || !/^https?:\/\//i.test(maskUrl)) {
+        continue;
+      }
+
+      const fillColor = pickStyleValue("backgroundColor", layer?.backgroundColor || "");
+      if (fillColor) {
+        pushItem(`mask:${maskUrl}|${fillColor}`, {
+          key: `mask:${maskUrl}|${fillColor}`,
+          url: maskUrl,
+          previewUrl: "",
+          kind: "mask-color",
+          maskUrl,
+          fillColor,
+          label: "forma",
+        });
+      } else {
+        addUrlItem(maskUrl, "mask");
+      }
+    }
+
+    return Array.from(itemsByKey.values()).slice(0, 40);
+  }
+
+  function collectTemplateAssetUrls(templateObject) {
+    const urls = new Set();
+    const layers = Array.isArray(templateObject?.layers) ? templateObject.layers : [];
+
+    for (const layer of layers) {
+      if (Array.isArray(layer?.sources)) {
+        for (const source of layer.sources) {
+          if (source && /^https?:\/\//i.test(String(source))) {
+            urls.add(source);
+          }
+        }
+      }
+
+      if (typeof layer?.imageUrl === "string" && /^https?:\/\//i.test(layer.imageUrl)) {
+        urls.add(layer.imageUrl);
+      }
+
+      if (typeof layer?.maskSource === "string" && /^https?:\/\//i.test(layer.maskSource)) {
+        urls.add(layer.maskSource);
+      }
+
+      const maskUrl = extractFirstCssUrl(layer?.maskImage);
+      if (maskUrl && /^https?:\/\//i.test(maskUrl)) {
+        urls.add(maskUrl);
+      }
+    }
+
+    return urls;
+  }
+
+  function resolveTemplateFromAnalysisObject(analysisObject) {
+    if (!analysisObject || typeof analysisObject !== "object" || Array.isArray(analysisObject)) {
+      return null;
+    }
+
+    if (isTemplateLike(analysisObject)) {
+      return analysisObject;
+    }
+
+    if (Array.isArray(analysisObject.layers)) {
+      return buildMockupTemplate(analysisObject);
+    }
+
+    if (state.rawElementAnalysis && typeof state.rawElementAnalysis === "object") {
+      const baseTemplate = buildMockupTemplate(state.rawElementAnalysis);
+      return applyAssetOverridesToTemplate(baseTemplate, analysisObject);
+    }
+
+    return null;
   }
 
   function buildMockupTemplate(rawAnalysis) {
@@ -260,6 +548,7 @@ export function createPopupActions(state, elements, renderer, logs) {
           layer?.imageUrl,
           ...(Array.isArray(layer?.backgroundImageUrls) ? layer.backgroundImageUrls : []),
         ].filter(Boolean);
+        const maskSource = extractFirstCssUrl(layer?.maskImage);
 
         return {
           id: layer?.id || `layer_${index + 1}`,
@@ -267,6 +556,12 @@ export function createPopupActions(state, elements, renderer, logs) {
           selector: layer?.selector || "",
           tagName: layer?.tagName || "",
           rect: layer?.relativeRect || layer?.rect || {},
+          layoutWidth: Number.isFinite(Number(layer?.layoutWidth))
+            ? Number(layer.layoutWidth)
+            : undefined,
+          layoutHeight: Number.isFinite(Number(layer?.layoutHeight))
+            ? Number(layer.layoutHeight)
+            : undefined,
           zIndex: Number.isFinite(layer?.zIndex) ? layer.zIndex : 0,
           opacity: layer?.opacity || "1",
           transform: layer?.transform || "none",
@@ -275,16 +570,25 @@ export function createPopupActions(state, elements, renderer, logs) {
           borderRadius: layer?.borderRadius || "0px",
           objectFit: layer?.objectFit || "fill",
           objectPosition: layer?.objectPosition || "50% 50%",
+          backgroundSize: layer?.backgroundSize || "",
+          backgroundPosition: layer?.backgroundPosition || "",
+          backgroundRepeat: layer?.backgroundRepeat || "",
           textColor: layer?.textColor || "",
           fontFamily: layer?.fontFamily || "",
           fontSize: layer?.fontSize || "",
           fontWeight: layer?.fontWeight || "",
+          fontStyle: layer?.fontStyle || "",
           lineHeight: layer?.lineHeight || "",
+          letterSpacing: layer?.letterSpacing || "",
           textAlign: layer?.textAlign || "",
           backgroundColor: layer?.backgroundColor || "",
           backgroundImage: layer?.backgroundImage || "",
           text: layer?.text || "",
           maskImage: layer?.maskImage || "",
+          maskSize: layer?.maskSize || "",
+          maskPosition: layer?.maskPosition || "",
+          maskRepeat: layer?.maskRepeat || "",
+          maskSource,
           sources,
           replaceable: sources.length > 0,
         };
@@ -387,30 +691,170 @@ export function createPopupActions(state, elements, renderer, logs) {
     };
   }
 
+  function escapeXml(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&apos;");
+  }
+
+  function buildSvgPreviewDataUrl(template) {
+    if (!template || typeof template !== "object") {
+      return "";
+    }
+
+    const width = Math.max(
+      1,
+      Number(template?.canvas?.width || template?.element?.size?.width || 0),
+    );
+    const height = Math.max(
+      1,
+      Number(template?.canvas?.height || template?.element?.size?.height || 0),
+    );
+    const layers = Array.isArray(template.layers) ? template.layers : [];
+    const sorted = layers
+      .map((layer, index) => ({
+        layer,
+        index,
+        zIndex: Number.isFinite(layer?.zIndex) ? layer.zIndex : 0,
+      }))
+      .sort((left, right) => {
+        if (left.zIndex !== right.zIndex) {
+          return left.zIndex - right.zIndex;
+        }
+        return left.index - right.index;
+      });
+
+    const defs = [
+      `<clipPath id="preview_canvas_clip"><rect x="0" y="0" width="${width}" height="${height}" /></clipPath>`,
+    ];
+    const nodes = [];
+
+    for (const { layer, index } of sorted) {
+      const rect = layer?.rect || {};
+      const x = Number(rect.x);
+      const y = Number(rect.y);
+      const w = Number(rect.width);
+      const h = Number(rect.height);
+      if (
+        !Number.isFinite(x) ||
+        !Number.isFinite(y) ||
+        !Number.isFinite(w) ||
+        !Number.isFinite(h) ||
+        w <= 0 ||
+        h <= 0
+      ) {
+        continue;
+      }
+
+      const sources = Array.isArray(layer?.sources) ? layer.sources : [];
+      const sourceHref =
+        (sources.find((source) => typeof source === "string" && source) || "") ||
+        (typeof layer?.imageUrl === "string" ? layer.imageUrl : "");
+      const backgroundColor = String(layer?.backgroundColor || "").trim();
+      const text = String(layer?.text || "").trim();
+      const maskSource = extractFirstCssUrl(layer?.maskImage) || layer?.maskSource || "";
+      const opacity = Math.max(0, Math.min(1, Number(layer?.opacity || 1)));
+      const opacityAttr = opacity < 1 ? ` opacity="${opacity}"` : "";
+      const maskId = maskSource ? `preview_mask_${index + 1}` : "";
+      const maskAttr = maskSource ? ` mask="url(#${maskId})"` : "";
+
+      if (maskSource) {
+        defs.push(
+          `<mask id="${maskId}" maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse" x="${x}" y="${y}" width="${w}" height="${h}" style="mask-type: alpha;"><image x="${x}" y="${y}" width="${w}" height="${h}" preserveAspectRatio="none" href="${escapeXml(maskSource)}" /></mask>`,
+        );
+      }
+
+      if (
+        backgroundColor &&
+        backgroundColor !== "transparent" &&
+        backgroundColor !== "rgba(0, 0, 0, 0)"
+      ) {
+        nodes.push(
+          `<rect id="layer_bg_${index + 1}" x="${x}" y="${y}" width="${w}" height="${h}" fill="${escapeXml(backgroundColor)}"${maskAttr}${opacityAttr} />`,
+        );
+      }
+
+      if (sourceHref) {
+        nodes.push(
+          `<image id="layer_img_${index + 1}" x="${x}" y="${y}" width="${w}" height="${h}" preserveAspectRatio="xMidYMid slice"${maskAttr}${opacityAttr} href="${escapeXml(sourceHref)}" />`,
+        );
+      }
+
+      if (text) {
+        const fontSize = Math.max(10, Number.parseFloat(layer?.fontSize || "16"));
+        const textColor = String(layer?.textColor || "").trim() || "#111111";
+        nodes.push(
+          `<text id="layer_text_${index + 1}" x="${x}" y="${y + fontSize}" font-size="${fontSize}" fill="${escapeXml(textColor)}"${opacityAttr}>${escapeXml(text)}</text>`,
+        );
+      }
+    }
+
+    const svg = [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
+      `<defs>${defs.join("")}</defs>`,
+      '<g clip-path="url(#preview_canvas_clip)">',
+      ...nodes,
+      "</g>",
+      "</svg>",
+    ].join("\n");
+
+    return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+  }
+
   function getTemplatePayload() {
-    if (!state.rawElementAnalysis) {
+    const analysis = getCurrentAnalysisObject({
+      reportErrors: true,
+      operation: "exportar la plantilla",
+    });
+    if (!analysis) {
       return null;
     }
 
-    return JSON.stringify(buildMockupTemplate(state.rawElementAnalysis), null, 2);
+    const template = resolveTemplateFromAnalysisObject(analysis);
+    if (!template) {
+      elements.statusMessage.textContent =
+        "El JSON actual no te prou dades per generar plantilla.";
+      logs.push("error", "No s'ha pogut exportar la plantilla.", {
+        message: "JSON sense capes ni base de plantilla",
+      });
+      return null;
+    }
+
+    return JSON.stringify(template, null, 2);
   }
 
   function getTemplateObject() {
-    if (!state.rawElementAnalysis) {
+    const analysis = getCurrentAnalysisObject({
+      reportErrors: true,
+      operation: "generar la plantilla",
+    });
+    if (!analysis) {
       return null;
     }
 
-    return buildMockupTemplate(state.rawElementAnalysis);
+    const template = resolveTemplateFromAnalysisObject(analysis);
+    if (!template) {
+      elements.statusMessage.textContent =
+        "El JSON actual no te prou dades per generar plantilla.";
+      logs.push("error", "No s'ha pogut generar la plantilla.", {
+        message: "JSON sense capes ni base de plantilla",
+      });
+      return null;
+    }
+
+    return template;
   }
 
-  function collectBlockDownloadUrls() {
-    if (!state.rawElementAnalysis) {
+  function collectBlockDownloadUrls(templateObject) {
+    if (!templateObject) {
       return [];
     }
 
-    const compactAnalysis =
-      state.elementAnalysis || compactElementAnalysis(state.rawElementAnalysis);
-    const urls = collectAnalysisAssetUrls(state.rawElementAnalysis, compactAnalysis);
+    const urls = collectTemplateAssetUrls(templateObject);
 
     return Array.from(urls).filter(
       (url) => typeof url === "string" && /^https?:\/\//i.test(url),
@@ -469,6 +913,7 @@ export function createPopupActions(state, elements, renderer, logs) {
       state.activeScope = "all";
       state.currentPage = 1;
       state.rawElementAnalysis = null;
+      state.elementSvgPreviewUrl = "";
       renderer.clearElementAnalysis();
       elements.statusMessage.textContent = `${images.length} imatges trobades a la pestanya actual.`;
       renderer.renderAll();
@@ -481,6 +926,7 @@ export function createPopupActions(state, elements, renderer, logs) {
       state.activeScope = "all";
       state.currentPage = 1;
       state.rawElementAnalysis = null;
+      state.elementSvgPreviewUrl = "";
       renderer.clearElementAnalysis();
       elements.statusMessage.textContent =
         "No s'ha pogut llegir aquesta pestanya. Prova una web normal, no chrome://.";
@@ -627,8 +1073,18 @@ export function createPopupActions(state, elements, renderer, logs) {
   }
 
   async function analyzeElement() {
+    if (state.analysisInProgress) {
+      return;
+    }
+
+    const setAnalyzeButtonActive = (active) => {
+      state.analysisInProgress = active;
+      elements.analyzeElementButton.classList.toggle("secondary-button--active", active);
+      elements.analyzeElementButton.setAttribute("aria-pressed", active ? "true" : "false");
+    };
+
     debugLog("analyzeElement: inici");
-    elements.analyzeElementButton.disabled = true;
+    setAnalyzeButtonActive(true);
     elements.statusMessage.textContent =
       "Analisi activa. Clica un bloc de la pagina o prem Esc per cancel-lar.";
 
@@ -653,6 +1109,9 @@ export function createPopupActions(state, elements, renderer, logs) {
       }
 
       state.rawElementAnalysis = result.analysis;
+      state.elementSvgPreviewUrl = buildSvgPreviewDataUrl(
+        buildMockupTemplate(result.analysis),
+      );
       const compactAnalysis = compactElementAnalysis(result.analysis);
       const analysisUrls = collectAnalysisAssetUrls(result.analysis, compactAnalysis);
       const knownUrls = new Set(state.images.map((image) => image.url));
@@ -673,7 +1132,9 @@ export function createPopupActions(state, elements, renderer, logs) {
       state.activeScope = matchedCount > 0 ? "analysis" : "all";
       state.currentPage = 1;
 
-      renderer.renderElementAnalysis(compactAnalysis);
+      renderer.renderElementAnalysis(compactAnalysis, {
+        previewUrls: getPreviewAssetItemsFromAnalysis(result.analysis, compactAnalysis),
+      });
       renderer.renderAll();
       elements.statusMessage.textContent =
         matchedCount > 0
@@ -687,8 +1148,52 @@ export function createPopupActions(state, elements, renderer, logs) {
       debugError("error analitzant bloc", error);
       logs.reportError(elements.statusMessage.textContent, error);
     } finally {
-      elements.analyzeElementButton.disabled = false;
+      setAnalyzeButtonActive(false);
     }
+  }
+
+  function handleAnalysisEditorInput() {
+    if (!state.elementAnalysis) {
+      return;
+    }
+
+    const payload = getAnalysisEditorText().trim();
+    if (!payload) {
+      state.elementSvgPreviewUrl = "";
+      renderer.renderAnalysisDetectedAssets([]);
+      renderer.renderAnalysisSvgPreview();
+      elements.copyAnalysisButton.disabled = true;
+      elements.saveAnalysisButton.disabled = true;
+      elements.saveTemplateButton.disabled = true;
+      elements.downloadBlockBundleButton.disabled = true;
+      return;
+    }
+
+    elements.copyAnalysisButton.disabled = false;
+    elements.saveAnalysisButton.disabled = false;
+
+    const parsed = getCurrentAnalysisObject({ reportErrors: false });
+    if (!parsed) {
+      state.elementSvgPreviewUrl = "";
+      renderer.renderAnalysisDetectedAssets([]);
+      renderer.renderAnalysisSvgPreview();
+      elements.saveTemplateButton.disabled = true;
+      elements.downloadBlockBundleButton.disabled = true;
+      return;
+    }
+
+    elements.saveTemplateButton.disabled = false;
+    elements.downloadBlockBundleButton.disabled = false;
+
+    const template = resolveTemplateFromAnalysisObject(parsed);
+    if (template) {
+      state.elementSvgPreviewUrl = buildSvgPreviewDataUrl(template);
+    } else {
+      state.elementSvgPreviewUrl = "";
+    }
+
+    renderer.renderAnalysisDetectedAssets(getPreviewImageUrlsFromAnalysis(parsed));
+    renderer.renderAnalysisSvgPreview();
   }
 
   async function copyElementAnalysis() {
@@ -789,7 +1294,7 @@ export function createPopupActions(state, elements, renderer, logs) {
       return;
     }
 
-    const urls = collectBlockDownloadUrls();
+    const urls = collectBlockDownloadUrls(templateObject);
 
     if (urls.length === 0) {
       elements.statusMessage.textContent =
@@ -843,6 +1348,7 @@ export function createPopupActions(state, elements, renderer, logs) {
 
   function clearElementAnalysis() {
     state.rawElementAnalysis = null;
+    state.elementSvgPreviewUrl = "";
     state.analyzedImageUrls = new Set();
     state.activeScope = "all";
     state.currentPage = 1;
@@ -862,6 +1368,7 @@ export function createPopupActions(state, elements, renderer, logs) {
     saveElementAnalysis,
     saveMockupTemplate,
     downloadBlockBundle,
+    handleAnalysisEditorInput,
     clearElementAnalysis,
     getFilteredImages: () => getFilteredImages(state),
   };
