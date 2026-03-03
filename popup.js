@@ -91,6 +91,14 @@ elements.saveAnalysisButton.addEventListener("click", () => {
   actions.saveElementAnalysis();
 });
 
+elements.saveTemplateButton.addEventListener("click", () => {
+  actions.saveMockupTemplate();
+});
+
+elements.downloadBlockBundleButton.addEventListener("click", () => {
+  actions.downloadBlockBundle();
+});
+
 elements.clearAnalysisButton.addEventListener("click", () => {
   actions.clearElementAnalysis();
 });

@@ -204,12 +204,217 @@ export function createPopupActions(state, elements, renderer, logs) {
     return `${DOWNLOADS_SUBDIRECTORY}/analisi_bloc_${stamp}.json`;
   }
 
+  function buildTemplateFilename() {
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    return `${DOWNLOADS_SUBDIRECTORY}/plantilla_mockup_${stamp}.json`;
+  }
+
   function getAnalysisPayload() {
     if (!state.elementAnalysis) {
       return null;
     }
 
     return JSON.stringify(state.elementAnalysis, null, 2);
+  }
+
+  function collectAnalysisAssetUrls(rawAnalysis, compactAnalysis) {
+    const urls = new Set();
+    const compactAssets = compactAnalysis?.assets || {};
+    const rawAssets = rawAnalysis?.assets || {};
+    const rawLayers = Array.isArray(rawAnalysis?.layers) ? rawAnalysis.layers : [];
+
+    for (const source of [
+      ...(compactAssets.imageUrls || []),
+      ...(compactAssets.backgroundImageUrls || []),
+      ...(rawAssets.imageUrls || []),
+      ...(rawAssets.backgroundImageUrls || []),
+    ]) {
+      if (source) {
+        urls.add(source);
+      }
+    }
+
+    for (const layer of rawLayers) {
+      if (layer?.imageUrl) {
+        urls.add(layer.imageUrl);
+      }
+
+      if (Array.isArray(layer?.backgroundImageUrls)) {
+        for (const url of layer.backgroundImageUrls) {
+          if (url) {
+            urls.add(url);
+          }
+        }
+      }
+    }
+
+    return urls;
+  }
+
+  function buildMockupTemplate(rawAnalysis) {
+    const sourceElement = rawAnalysis?.element || {};
+    const sourceRect = sourceElement.rect || {};
+    const layers = (Array.isArray(rawAnalysis?.layers) ? rawAnalysis.layers : []).map(
+      (layer, index) => {
+        const sources = [
+          layer?.imageUrl,
+          ...(Array.isArray(layer?.backgroundImageUrls) ? layer.backgroundImageUrls : []),
+        ].filter(Boolean);
+
+        return {
+          id: layer?.id || `layer_${index + 1}`,
+          role: layer?.role || "unknown",
+          selector: layer?.selector || "",
+          tagName: layer?.tagName || "",
+          rect: layer?.relativeRect || layer?.rect || {},
+          zIndex: Number.isFinite(layer?.zIndex) ? layer.zIndex : 0,
+          opacity: layer?.opacity || "1",
+          transform: layer?.transform || "none",
+          transformOrigin: layer?.transformOrigin || "",
+          blendMode: layer?.blendMode || "normal",
+          borderRadius: layer?.borderRadius || "0px",
+          objectFit: layer?.objectFit || "fill",
+          objectPosition: layer?.objectPosition || "50% 50%",
+          textColor: layer?.textColor || "",
+          fontFamily: layer?.fontFamily || "",
+          fontSize: layer?.fontSize || "",
+          fontWeight: layer?.fontWeight || "",
+          lineHeight: layer?.lineHeight || "",
+          textAlign: layer?.textAlign || "",
+          backgroundColor: layer?.backgroundColor || "",
+          backgroundImage: layer?.backgroundImage || "",
+          text: layer?.text || "",
+          maskImage: layer?.maskImage || "",
+          sources,
+          replaceable: sources.length > 0,
+        };
+      },
+    );
+
+    const replaceableLayers = layers
+      .filter((layer) => layer.replaceable)
+      .map((layer) => ({
+        id: layer.id,
+        selector: layer.selector,
+        role: layer.role,
+        sources: layer.sources,
+      }));
+
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+
+    for (const layer of layers) {
+      const rect = layer?.rect || {};
+      const x = Number(rect.x);
+      const y = Number(rect.y);
+      const width = Number(rect.width);
+      const height = Number(rect.height);
+
+      if (
+        !Number.isFinite(x) ||
+        !Number.isFinite(y) ||
+        !Number.isFinite(width) ||
+        !Number.isFinite(height) ||
+        width <= 0 ||
+        height <= 0
+      ) {
+        continue;
+      }
+
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x + width);
+      maxY = Math.max(maxY, y + height);
+    }
+
+    const contentBounds =
+      Number.isFinite(minX) &&
+      Number.isFinite(minY) &&
+      Number.isFinite(maxX) &&
+      Number.isFinite(maxY)
+        ? {
+            x: Math.round(minX),
+            y: Math.round(minY),
+            width: Math.max(0, Math.round(maxX - minX)),
+            height: Math.max(0, Math.round(maxY - minY)),
+          }
+        : {
+            x: 0,
+            y: 0,
+            width: Number.isFinite(sourceRect.width) ? sourceRect.width : 0,
+            height: Number.isFinite(sourceRect.height) ? sourceRect.height : 0,
+          };
+
+    const canvasWidth = Math.max(
+      1,
+      Number.isFinite(sourceRect.width) ? Math.round(sourceRect.width) : contentBounds.width,
+    );
+    const canvasHeight = Math.max(
+      1,
+      Number.isFinite(sourceRect.height) ? Math.round(sourceRect.height) : contentBounds.height,
+    );
+
+    return {
+      templateVersion: 1,
+      exportedAt: new Date().toISOString(),
+      source: {
+        url: rawAnalysis?.page?.url || "",
+        title: rawAnalysis?.page?.title || "",
+      },
+      element: {
+        selector: sourceElement.selector || "",
+        tagName: sourceElement.tagName || "",
+        size: {
+          width: Number.isFinite(sourceRect.width) ? sourceRect.width : 0,
+          height: Number.isFinite(sourceRect.height) ? sourceRect.height : 0,
+        },
+      },
+      canvas: {
+        width: canvasWidth,
+        height: canvasHeight,
+        contentBounds,
+      },
+      styles: rawAnalysis?.styles || {},
+      typography: rawAnalysis?.typography || {},
+      layers,
+      replaceableLayers,
+      notes: [
+        "Aquesta plantilla no es PSD; serveix com a mapa de capes i assets.",
+        "Les capes replaceable=true son les que pots substituir en eines externes.",
+      ],
+    };
+  }
+
+  function getTemplatePayload() {
+    if (!state.rawElementAnalysis) {
+      return null;
+    }
+
+    return JSON.stringify(buildMockupTemplate(state.rawElementAnalysis), null, 2);
+  }
+
+  function getTemplateObject() {
+    if (!state.rawElementAnalysis) {
+      return null;
+    }
+
+    return buildMockupTemplate(state.rawElementAnalysis);
+  }
+
+  function collectBlockDownloadUrls() {
+    if (!state.rawElementAnalysis) {
+      return [];
+    }
+
+    const compactAnalysis =
+      state.elementAnalysis || compactElementAnalysis(state.rawElementAnalysis);
+    const urls = collectAnalysisAssetUrls(state.rawElementAnalysis, compactAnalysis);
+
+    return Array.from(urls).filter(
+      (url) => typeof url === "string" && /^https?:\/\//i.test(url),
+    );
   }
 
   async function getActiveTab() {
@@ -263,6 +468,7 @@ export function createPopupActions(state, elements, renderer, logs) {
       state.activeSizeKey = "all";
       state.activeScope = "all";
       state.currentPage = 1;
+      state.rawElementAnalysis = null;
       renderer.clearElementAnalysis();
       elements.statusMessage.textContent = `${images.length} imatges trobades a la pestanya actual.`;
       renderer.renderAll();
@@ -274,6 +480,7 @@ export function createPopupActions(state, elements, renderer, logs) {
       state.activeSizeKey = "all";
       state.activeScope = "all";
       state.currentPage = 1;
+      state.rawElementAnalysis = null;
       renderer.clearElementAnalysis();
       elements.statusMessage.textContent =
         "No s'ha pogut llegir aquesta pestanya. Prova una web normal, no chrome://.";
@@ -445,12 +652,9 @@ export function createPopupActions(state, elements, renderer, logs) {
         throw new Error("No s'ha pogut analitzar el bloc seleccionat.");
       }
 
+      state.rawElementAnalysis = result.analysis;
       const compactAnalysis = compactElementAnalysis(result.analysis);
-      const analysisAssets = compactAnalysis.assets || {};
-      const analysisUrls = new Set([
-        ...(analysisAssets.imageUrls || []),
-        ...(analysisAssets.backgroundImageUrls || []),
-      ]);
+      const analysisUrls = collectAnalysisAssetUrls(result.analysis, compactAnalysis);
       const knownUrls = new Set(state.images.map((image) => image.url));
       const nextSelectedUrls = new Set(state.selectedUrls);
       let matchedCount = 0;
@@ -541,7 +745,104 @@ export function createPopupActions(state, elements, renderer, logs) {
     }
   }
 
+  async function saveMockupTemplate() {
+    const payload = getTemplatePayload();
+
+    if (!payload) {
+      elements.statusMessage.textContent = "No hi ha cap analisi per exportar plantilla.";
+      return;
+    }
+
+    const blob = new Blob([payload], { type: "application/json" });
+    const objectUrl = URL.createObjectURL(blob);
+
+    try {
+      const downloadId = await chrome.downloads.download({
+        url: objectUrl,
+        filename: buildTemplateFilename(),
+        conflictAction: "uniquify",
+        saveAs: false,
+      });
+
+      if (!Number.isInteger(downloadId)) {
+        throw new Error("Chrome no ha retornat cap downloadId.");
+      }
+
+      elements.statusMessage.textContent =
+        "Plantilla mockup guardada a Downloads/Image Picker/.";
+    } catch (error) {
+      elements.statusMessage.textContent = "No s'ha pogut guardar la plantilla mockup.";
+      debugError("error guardant plantilla mockup", error);
+      logs.reportError(elements.statusMessage.textContent, error);
+    } finally {
+      setTimeout(() => {
+        URL.revokeObjectURL(objectUrl);
+      }, 1200);
+    }
+  }
+
+  async function downloadBlockBundle() {
+    const templateObject = getTemplateObject();
+
+    if (!templateObject) {
+      elements.statusMessage.textContent = "No hi ha cap analisi de bloc per exportar.";
+      return;
+    }
+
+    const urls = collectBlockDownloadUrls();
+
+    if (urls.length === 0) {
+      elements.statusMessage.textContent =
+        "No s'han detectat imatges HTTP/HTTPS dins del bloc analitzat.";
+      return;
+    }
+
+    elements.downloadBlockBundleButton.disabled = true;
+    elements.statusMessage.textContent = `Preparant ZIP del bloc (${urls.length} imatges + plantilla JSON/SVG)...`;
+
+    try {
+      const sourceContext = await getSourceContext();
+      const response = await chrome.runtime.sendMessage({
+        action: ACTIONS.DOWNLOAD_IMAGES,
+        urls,
+        preferArchive: true,
+        saveAs: false,
+        archiveTemplate: templateObject,
+        operation: "Descarrega bloc",
+        upscale: {
+          enabled: false,
+          factor: 2,
+        },
+        tabId: sourceContext.tabId,
+        windowId: sourceContext.windowId,
+      });
+
+      if (!response?.ok) {
+        throw new Error(
+          response?.error || "No s'ha pogut crear el ZIP del bloc.",
+        );
+      }
+
+      const count = response.count ?? urls.length;
+      elements.statusMessage.textContent =
+        `Bloc exportat: ZIP amb plantilla JSON/SVG + ${count} imatges.`;
+    } catch (error) {
+      elements.statusMessage.textContent =
+        error instanceof Error && error.message
+          ? error.message
+          : "No s'ha pogut exportar el bloc en ZIP.";
+      debugError("error exportant bloc en zip", error);
+      logs.push("error", elements.statusMessage.textContent, {
+        message: getErrorMessage(error),
+        count: urls.length,
+      });
+    } finally {
+      elements.downloadBlockBundleButton.disabled = !state.elementAnalysis;
+    }
+  }
+
   function clearElementAnalysis() {
+    state.rawElementAnalysis = null;
     state.analyzedImageUrls = new Set();
     state.activeScope = "all";
     state.currentPage = 1;
@@ -559,6 +860,8 @@ export function createPopupActions(state, elements, renderer, logs) {
     analyzeElement,
     copyElementAnalysis,
     saveElementAnalysis,
+    saveMockupTemplate,
+    downloadBlockBundle,
     clearElementAnalysis,
     getFilteredImages: () => getFilteredImages(state),
   };

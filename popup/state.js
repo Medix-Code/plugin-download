@@ -50,10 +50,10 @@ export const state = {
   sourceTabId: Number.NaN,
   sourceWindowId: Number.NaN,
   hideFixedSticky: true,
-  fullPageCaptureId: null,
   sourceTabUrl: "",
   elementCaptureInProgress: false,
   elementAnalysis: null,
+  rawElementAnalysis: null,
 };
 
 export function initializeStateFromUrl(urlParams) {

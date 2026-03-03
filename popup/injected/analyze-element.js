@@ -84,6 +84,200 @@ export function selectAndAnalyzeElement() {
     }
   }
 
+  function isTransparentColor(value) {
+    const normalized = String(value || "")
+      .replace(/\s+/g, "")
+      .toLowerCase();
+    return (
+      normalized === "transparent" ||
+      normalized === "rgba(0,0,0,0)" ||
+      normalized === "rgba(255,255,255,0)"
+    );
+  }
+
+  function toAbsoluteRect(rect) {
+    return {
+      x: Math.round(rect.left + window.scrollX),
+      y: Math.round(rect.top + window.scrollY),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+    };
+  }
+
+  function toRelativeRect(rect, rootRect) {
+    return {
+      x: Math.round(rect.left - rootRect.left),
+      y: Math.round(rect.top - rootRect.top),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+    };
+  }
+
+  function normalizeUrl(value) {
+    if (!value) {
+      return "";
+    }
+
+    try {
+      return new URL(value, window.location.href).href;
+    } catch {
+      return "";
+    }
+  }
+
+  function parseZIndex(value) {
+    if (!value || value === "auto") {
+      return 0;
+    }
+
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  function getDirectTextSnippet(node) {
+    if (!(node instanceof Element)) {
+      return "";
+    }
+
+    const chunks = [];
+    for (const child of node.childNodes) {
+      if (child.nodeType !== Node.TEXT_NODE) {
+        continue;
+      }
+
+      const text = normalizeWhitespace(child.textContent || "");
+      if (text) {
+        chunks.push(text);
+      }
+    }
+
+    return normalizeWhitespace(chunks.join(" ")).slice(0, 220);
+  }
+
+  function collectLayers(rootElement) {
+    const rootRect = rootElement.getBoundingClientRect();
+    const nodes = [rootElement, ...rootElement.querySelectorAll("*")].slice(0, 1200);
+    const layers = [];
+
+    for (let index = 0; index < nodes.length; index += 1) {
+      const node = nodes[index];
+
+      if (!(node instanceof Element)) {
+        continue;
+      }
+
+      const nodeStyle = window.getComputedStyle(node);
+      if (
+        nodeStyle.display === "none" ||
+        nodeStyle.visibility === "hidden" ||
+        Number.parseFloat(nodeStyle.opacity || "1") <= 0
+      ) {
+        continue;
+      }
+
+      const nodeRect = node.getBoundingClientRect();
+      if (nodeRect.width < 2 || nodeRect.height < 2) {
+        continue;
+      }
+
+      const backgroundUrls = new Set();
+      collectUrlsFromBackground(nodeStyle.backgroundImage, backgroundUrls);
+
+      let imageUrl = "";
+      if (node instanceof HTMLImageElement) {
+        imageUrl = normalizeUrl(node.currentSrc || node.src);
+      }
+
+      const directText = getDirectTextSnippet(node);
+      const hasGradient = /gradient\(/i.test(nodeStyle.backgroundImage || "");
+      const hasBackgroundColor = !isTransparentColor(nodeStyle.backgroundColor);
+      const hasBackgroundImage = backgroundUrls.size > 0;
+      const hasImage = Boolean(imageUrl);
+      const hasText = Boolean(directText);
+      const isRoot = node === rootElement;
+
+      if (
+        !isRoot &&
+        !hasImage &&
+        !hasBackgroundImage &&
+        !hasGradient &&
+        !hasBackgroundColor &&
+        !hasText
+      ) {
+        continue;
+      }
+
+      const layer = {
+        id: `layer_${layers.length + 1}`,
+        role: isRoot
+          ? "root"
+          : hasImage
+            ? "image"
+            : hasBackgroundImage || hasGradient
+              ? "background"
+              : hasText
+                ? "text"
+                : "shape",
+        tagName: node.tagName.toLowerCase(),
+        selector: buildSimpleSelector(node),
+        className: getClassName(node),
+        domOrder: index,
+        zIndex: parseZIndex(nodeStyle.zIndex),
+        opacity: nodeStyle.opacity,
+        transform: nodeStyle.transform,
+        transformOrigin: nodeStyle.transformOrigin,
+        blendMode: nodeStyle.mixBlendMode,
+        borderRadius: nodeStyle.borderRadius,
+        objectFit: nodeStyle.objectFit,
+        objectPosition: nodeStyle.objectPosition,
+        textColor: nodeStyle.color,
+        fontFamily: nodeStyle.fontFamily,
+        fontSize: nodeStyle.fontSize,
+        fontWeight: nodeStyle.fontWeight,
+        lineHeight: nodeStyle.lineHeight,
+        textAlign: nodeStyle.textAlign,
+        rect: toAbsoluteRect(nodeRect),
+        relativeRect: toRelativeRect(nodeRect, rootRect),
+      };
+
+      if (hasImage) {
+        layer.imageUrl = imageUrl;
+      }
+
+      if (hasBackgroundColor) {
+        layer.backgroundColor = nodeStyle.backgroundColor;
+      }
+
+      if (nodeStyle.backgroundImage && nodeStyle.backgroundImage !== "none") {
+        layer.backgroundImage = nodeStyle.backgroundImage.slice(0, 500);
+      }
+
+      if (hasBackgroundImage) {
+        layer.backgroundImageUrls = toArray(backgroundUrls, 6);
+      }
+
+      if (nodeStyle.maskImage && nodeStyle.maskImage !== "none") {
+        layer.maskImage = nodeStyle.maskImage.slice(0, 500);
+      }
+
+      if (hasText) {
+        layer.text = directText;
+      }
+
+      layers.push(layer);
+    }
+
+    layers.sort((left, right) => {
+      if (left.zIndex !== right.zIndex) {
+        return left.zIndex - right.zIndex;
+      }
+
+      return left.domOrder - right.domOrder;
+    });
+
+    return layers.slice(0, 240);
+  }
+
   function extractElementAnalysis(element) {
     const rect = element.getBoundingClientRect();
     const style = window.getComputedStyle(element);
@@ -176,6 +370,7 @@ export function selectAndAnalyzeElement() {
         backgroundImageUrls: toArray(backgroundImageUrls, 40),
         hasGradientBackground: /gradient\(/i.test(style.backgroundImage || ""),
       },
+      layers: collectLayers(element),
       rawHtmlSnippet: element.outerHTML.slice(0, 2400),
     };
   }

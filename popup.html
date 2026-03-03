@@ -76,19 +76,8 @@
           Els gradients CSS no tenen fitxer propi. Usa <strong>Captura bloc</strong> segons el que vulguis provar.
         </p>
 
-        <section class="capture-controls" aria-label="Opcions de captura">
-          <label
-            class="toggle-option"
-            title="Configuracio interna de captura."
-            hidden
-          >
-            <input id="hideFixedStickyCheckbox" type="checkbox" checked />
-            <span>Configuracio interna de captura</span>
-          </label>
-          <p class="capture-note" hidden>
-            Configuracio interna.
-          </p>
-
+        <section class="analysis-toolbar" aria-label="Analisi de bloc">
+          <input id="hideFixedStickyCheckbox" type="checkbox" checked hidden />
           <div class="analysis-actions">
             <button
               id="analyzeElementButton"
@@ -98,16 +87,6 @@
             >
               Analitza bloc
             </button>
-          </div>
-
-          <div id="fullPageProgressPanel" class="progress-panel" hidden>
-            <div class="progress-meta">
-              <span id="fullPageProgressText" class="progress-text">Preparant captura...</span>
-              <span id="fullPageProgressStats" class="progress-stats"></span>
-            </div>
-            <div class="progress-track" aria-hidden="true">
-              <div id="fullPageProgressBar" class="progress-bar"></div>
-            </div>
           </div>
         </section>
 
@@ -131,6 +110,17 @@
             </button>
             <button id="saveAnalysisButton" class="secondary-button secondary-button--small" type="button" disabled>
               Guardar JSON
+            </button>
+            <button id="saveTemplateButton" class="secondary-button secondary-button--small" type="button" disabled>
+              Exportar plantilla
+            </button>
+            <button
+              id="downloadBlockBundleButton"
+              class="secondary-button secondary-button--small"
+              type="button"
+              disabled
+            >
+              Descarrega bloc ZIP
             </button>
           </div>
         </section>

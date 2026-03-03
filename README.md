@@ -26,7 +26,7 @@ Extensio de Chrome per revisar les imatges visibles de la pestanya actual, desca
 3. Fes clic a `Load unpacked`.
 4. Selecciona aquesta carpeta: `/home/aksss/Code/plugin-download`.
 5. Obre qualsevol web i fes clic a la icona de l'extensio.
-6. El popup llistara les imatges detectades amb checkbox.
+6. En clicar la icona, s'obre directament la finestra gran maximitzada del plugin.
 7. Selecciona les que vulguis i fes clic a `Descarregar`.
 8. Si hi ha mes d'una imatge seleccionada, l'extensio crea un `ZIP` unic.
 9. La llista usa paginacio de `20` imatges per pagina amb controls `Anterior/Seguent`.
@@ -34,6 +34,8 @@ Extensio de Chrome per revisar les imatges visibles de la pestanya actual, desca
 11. L'extensio te acces de lectura als fitxers `http/https` per poder crear el `ZIP` sense demanar permisos extra a cada descarrega.
 12. `Captura bloc` et deixa clicar un element concret de la pagina i el retalla com PNG.
 13. `Analitza bloc` et deixa clicar un element i obtenir JSON amb estils, tipografia, colors, text i assets detectats.
+14. Des del panell d'analisi pots usar `Exportar plantilla` per generar un JSON de mockup amb capes i assets reemplaçables.
+15. El boto `Descarrega bloc ZIP` exporta en un sol ZIP la plantilla (`.json` + `.svg`) i les imatges relacionades amb el bloc analitzat.
 
 ## Notes
 
@@ -42,6 +44,8 @@ Extensio de Chrome per revisar les imatges visibles de la pestanya actual, desca
 - Quan hi ha diverses imatges seleccionades, crea un `ZIP` unic. Si no el pot crear, mostra error en lloc de baixar-les una per una.
 - Totes les descarregues i captures van a `Downloads/Image Picker/`.
 - Les analisis de bloc es poden copiar al porta-retalls o guardar com JSON a `Downloads/Image Picker/`.
+- L'opcio `Exportar plantilla` crea una plantilla JSON per reconstruir capes en eines externes (p. ex. GIMP/Photopea).
+- `Descarrega bloc ZIP` empaqueta `plantilla_mockup.json`, `plantilla_mockup.svg` i assets del bloc en un unic fitxer ZIP.
 - Quan analitzes un bloc, el filtre `Bloc analitzat` deixa veure nomes les imatges detectades dins aquell bloc.
 - Si la pestanya es `chrome://` o una pagina protegida del navegador, Chrome no deixara escanejar-la.
 - `Captura bloc` retalla nomes l'element que cliquis a la pagina, util per previews amb gradient i composicio final.

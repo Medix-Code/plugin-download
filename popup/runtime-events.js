@@ -7,40 +7,6 @@ export function registerRuntimeEvents(state, elements, renderer, logs) {
       return;
     }
 
-    if (message?.action === ACTIONS.FULL_PAGE_CAPTURE_PROGRESS) {
-      const progress = message.progress;
-
-      if (
-        !progress ||
-        (Number.isInteger(state.sourceTabId) &&
-          progress.tabId !== state.sourceTabId) ||
-        (Number.isInteger(state.sourceWindowId) &&
-          progress.windowId !== state.sourceWindowId)
-      ) {
-        return;
-      }
-
-      if (progress.phase === "started") {
-        state.fullPageCaptureId = progress.captureId;
-        renderer.setFullPageProgress(progress);
-        return;
-      }
-
-      if (
-        state.fullPageCaptureId &&
-        progress.captureId !== state.fullPageCaptureId
-      ) {
-        return;
-      }
-
-      renderer.setFullPageProgress(progress);
-
-      if (progress.phase === "done" || progress.phase === "error") {
-        state.fullPageCaptureId = null;
-      }
-      return;
-    }
-
     if (message?.action !== ACTIONS.ELEMENT_CAPTURE_STATUS) {
       return;
     }

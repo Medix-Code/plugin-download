@@ -29,7 +29,57 @@ function hasValidSelection(message) {
   );
 }
 
+async function openExpandedWindowFromContext(tabId, windowId, options = {}) {
+  const popupUrl = buildExpandedPopupUrl(tabId, windowId, {
+    hideFixedSticky: options.hideFixedSticky !== false,
+    upscaleEnabled: options.upscaleEnabled === true,
+    upscaleFactor: options.upscaleFactor === 4 ? 4 : 2,
+    saveAs: options.saveAs === true,
+  });
+
+  try {
+    return await createMaximizedExpandedWindow({
+      url: popupUrl,
+    });
+  } catch (error) {
+    debugError("no s'ha pogut obrir maximitzada, fallback a finestra gran", error);
+    return createFallbackExpandedWindow({
+      url: popupUrl,
+    });
+  }
+}
+
 export function startBackgroundRouter() {
+  chrome.action.onClicked.addListener((tab) => {
+    if (!isInteger(tab?.id) || !isInteger(tab?.windowId)) {
+      emitPluginLog("warn", "No s'ha pogut obrir la finestra gran des de la toolbar.", {
+        tabId: tab?.id ?? null,
+        windowId: tab?.windowId ?? null,
+      });
+      return;
+    }
+
+    openExpandedWindowFromContext(tab.id, tab.windowId, {
+      hideFixedSticky: true,
+      saveAs: false,
+      upscaleEnabled: false,
+      upscaleFactor: 2,
+    })
+      .then((createdWindow) => {
+        debugLog("finestra gran oberta des de toolbar", {
+          sourceTabId: tab.id,
+          sourceWindowId: tab.windowId,
+          popupWindowId: createdWindow.id,
+          state: createdWindow.state,
+        });
+      })
+      .catch((error) => {
+        emitPluginLog("error", "Error obrint la finestra gran des de la toolbar.", {
+          message: getErrorMessage(error),
+        });
+      });
+  });
+
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (hasAction(message, ACTIONS.DOWNLOAD_IMAGES) && Array.isArray(message.urls)) {
       debugLog("missatge downloadImages", {
@@ -40,10 +90,20 @@ export function startBackgroundRouter() {
       downloadImages(message.urls, {
         preferArchive: message.preferArchive !== false,
         saveAs: message.saveAs === true,
-        operation: "Descarregar imatges",
+        operation:
+          typeof message.operation === "string" && message.operation.trim()
+            ? message.operation.trim()
+            : "Descarregar imatges",
         upscale: message.upscale,
         tabId: isInteger(message.tabId) ? message.tabId : null,
         windowId: isInteger(message.windowId) ? message.windowId : null,
+        archiveExtraEntries: Array.isArray(message.archiveExtraEntries)
+          ? message.archiveExtraEntries
+          : [],
+        archiveTemplate:
+          isObject(message.archiveTemplate) && !Array.isArray(message.archiveTemplate)
+            ? message.archiveTemplate
+            : null,
       })
         .then((result) => {
           sendResponse({
@@ -243,25 +303,12 @@ export function startBackgroundRouter() {
       isInteger(message.tabId) &&
       isInteger(message.windowId)
     ) {
-      const popupUrl = buildExpandedPopupUrl(message.tabId, message.windowId, {
+      openExpandedWindowFromContext(message.tabId, message.windowId, {
         hideFixedSticky: message.hideFixedSticky !== false,
         upscaleEnabled: message.upscaleEnabled === true,
         upscaleFactor: message.upscaleFactor === 4 ? 4 : 2,
         saveAs: message.saveAs === true,
-      });
-
-      createMaximizedExpandedWindow({
-        url: popupUrl,
       })
-        .catch((error) => {
-          debugError(
-            "no s'ha pogut obrir maximitzada, fallback a finestra gran",
-            error,
-          );
-          return createFallbackExpandedWindow({
-            url: popupUrl,
-          });
-        })
         .then((createdWindow) => {
           debugLog("finestra gran oberta", {
             windowId: createdWindow.id,

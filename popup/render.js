@@ -38,17 +38,6 @@ function getDomainLabel(url) {
   }
 }
 
-function getProgressPercentage(progress) {
-  if (!Number.isFinite(progress?.total) || progress.total <= 0) {
-    return 0;
-  }
-
-  return Math.max(
-    0,
-    Math.min(100, Math.round((progress.current / progress.total) * 100)),
-  );
-}
-
 export function createRenderer(state, elements) {
   function updateSourceSite(url) {
     const domainLabel = getDomainLabel(url);
@@ -62,39 +51,6 @@ export function createRenderer(state, elements) {
     elements.sourceSiteValue.textContent = domainLabel;
     elements.sourceSite.title = url;
     elements.sourceSite.hidden = false;
-  }
-
-  function setFullPageProgress(progress) {
-    elements.fullPageProgressPanel.hidden = false;
-    elements.fullPageProgressBar.style.width = `${getProgressPercentage(progress)}%`;
-    elements.fullPageProgressText.textContent =
-      progress.message || "Capturant pagina...";
-    const parts = [];
-
-    if (Number.isFinite(progress.current) && Number.isFinite(progress.total)) {
-      parts.push(`${progress.current}/${progress.total}`);
-    }
-
-    if (Number.isFinite(progress.retries) && progress.retries > 0) {
-      parts.push(`${progress.retries} reintents`);
-    }
-
-    if (
-      Number.isFinite(progress.skippedDuplicatePositions) &&
-      progress.skippedDuplicatePositions > 0
-    ) {
-      parts.push(`${progress.skippedDuplicatePositions} posicions repetides`);
-    }
-
-    elements.fullPageProgressStats.textContent = parts.join(" · ");
-  }
-
-  function hideFullPageProgress() {
-    state.fullPageCaptureId = null;
-    elements.fullPageProgressPanel.hidden = true;
-    elements.fullPageProgressBar.style.width = "0%";
-    elements.fullPageProgressText.textContent = "Preparant captura...";
-    elements.fullPageProgressStats.textContent = "";
   }
 
   function updateSelectionCount() {
@@ -185,6 +141,8 @@ export function createRenderer(state, elements) {
     elements.analysisPanel.hidden = false;
     elements.copyAnalysisButton.disabled = false;
     elements.saveAnalysisButton.disabled = false;
+    elements.saveTemplateButton.disabled = false;
+    elements.downloadBlockBundleButton.disabled = false;
     elements.clearAnalysisButton.disabled = false;
   }
 
@@ -195,6 +153,8 @@ export function createRenderer(state, elements) {
     elements.analysisPanel.hidden = true;
     elements.copyAnalysisButton.disabled = true;
     elements.saveAnalysisButton.disabled = true;
+    elements.saveTemplateButton.disabled = true;
+    elements.downloadBlockBundleButton.disabled = true;
     elements.clearAnalysisButton.disabled = true;
   }
 
@@ -434,8 +394,6 @@ export function createRenderer(state, elements) {
 
   return {
     updateSourceSite,
-    setFullPageProgress,
-    hideFullPageProgress,
     updateSelectionCount,
     closePreview,
     renderAll,
