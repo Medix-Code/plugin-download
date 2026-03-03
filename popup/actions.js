@@ -102,6 +102,26 @@ export function createPopupActions(state, elements, renderer, logs) {
       },
     };
 
+    const captureSelection = rawAnalysis?.captureSelection;
+    if (
+      captureSelection &&
+      Number.isFinite(captureSelection.left) &&
+      Number.isFinite(captureSelection.top) &&
+      Number.isFinite(captureSelection.width) &&
+      Number.isFinite(captureSelection.height) &&
+      Number.isFinite(captureSelection.viewportWidth) &&
+      Number.isFinite(captureSelection.viewportHeight)
+    ) {
+      summary.captureSelection = {
+        left: Math.round(captureSelection.left),
+        top: Math.round(captureSelection.top),
+        width: Math.max(1, Math.round(captureSelection.width)),
+        height: Math.max(1, Math.round(captureSelection.height)),
+        viewportWidth: Math.max(1, Math.round(captureSelection.viewportWidth)),
+        viewportHeight: Math.max(1, Math.round(captureSelection.viewportHeight)),
+      };
+    }
+
     if (element.id) {
       summary.element.id = element.id;
     }
@@ -129,6 +149,28 @@ export function createPopupActions(state, elements, renderer, logs) {
     const backgroundImageUrls = Array.isArray(assets.backgroundImageUrls)
       ? assets.backgroundImageUrls.filter(Boolean).slice(0, 12)
       : [];
+    const placeitCustomGraphicUrls = Array.isArray(assets.placeitCustomGraphicUrls)
+      ? assets.placeitCustomGraphicUrls.filter(Boolean).slice(0, 12)
+      : [];
+    const customGraphics = Array.isArray(assets.customGraphics)
+      ? assets.customGraphics
+          .filter((entry) => entry && typeof entry === "object")
+          .slice(0, 6)
+          .map((entry) => ({
+            key: String(entry.key || ""),
+            token: String(entry.token || ""),
+            previewUrl: String(entry.previewUrl || ""),
+            pixelWidth: Number.isFinite(Number(entry.pixelWidth))
+              ? Math.max(0, Math.round(Number(entry.pixelWidth)))
+              : 0,
+            pixelHeight: Number.isFinite(Number(entry.pixelHeight))
+              ? Math.max(0, Math.round(Number(entry.pixelHeight)))
+              : 0,
+            sources: Array.isArray(entry.sources)
+              ? entry.sources.filter(Boolean).slice(0, 4)
+              : [],
+          }))
+      : [];
 
     if (imageUrls.length > 0) {
       compactAssets.imageUrls = imageUrls;
@@ -138,12 +180,54 @@ export function createPopupActions(state, elements, renderer, logs) {
       compactAssets.backgroundImageUrls = backgroundImageUrls;
     }
 
+    if (placeitCustomGraphicUrls.length > 0) {
+      compactAssets.placeitCustomGraphicUrls = placeitCustomGraphicUrls;
+    }
+
+    if (customGraphics.length > 0) {
+      compactAssets.customGraphics = customGraphics;
+    }
+
     if (assets.hasGradientBackground === true) {
       compactAssets.hasGradientBackground = true;
     }
 
+    if (assets.hasCanvasLayer === true) {
+      compactAssets.hasCanvasLayer = true;
+    }
+
+    if (assets.hasReadableCanvasLayer === true) {
+      compactAssets.hasReadableCanvasLayer = true;
+    }
+
+    if (assets.hasUnreadableCanvasLayer === true) {
+      compactAssets.hasUnreadableCanvasLayer = true;
+    }
+
+    if (assets.hasPlaceitCustomGraphic === true || customGraphics.length > 0) {
+      compactAssets.hasPlaceitCustomGraphic = true;
+    }
+
     if (Object.keys(compactAssets).length > 0) {
       summary.assets = compactAssets;
+    }
+
+    if (
+      rawAnalysis?.placeitV4 &&
+      typeof rawAnalysis.placeitV4 === "object" &&
+      !Array.isArray(rawAnalysis.placeitV4)
+    ) {
+      const placeitV4 = {
+        smartObjectV4Id: String(rawAnalysis.placeitV4.smartObjectV4Id || "").trim(),
+        uiJsonUrl: String(rawAnalysis.placeitV4.uiJsonUrl || "").trim(),
+        structureJsonUrl: String(rawAnalysis.placeitV4.structureJsonUrl || "").trim(),
+        previewImageUrl: String(rawAnalysis.placeitV4.previewImageUrl || "").trim(),
+        stageImageUrl: String(rawAnalysis.placeitV4.stageImageUrl || "").trim(),
+      };
+
+      if (placeitV4.smartObjectV4Id) {
+        summary.placeitV4 = placeitV4;
+      }
     }
 
     const styleKeys = [
@@ -269,6 +353,213 @@ export function createPopupActions(state, elements, renderer, logs) {
     return payload || null;
   }
 
+  function extractCssUrls(value) {
+    const raw = String(value || "").trim();
+    if (!raw) {
+      return [];
+    }
+
+    const urls = [];
+    for (const match of raw.matchAll(/url\((['"]?)(.*?)\1\)/gi)) {
+      const candidate = String(match?.[2] || "").trim();
+      if (candidate) {
+        urls.push(candidate);
+      }
+    }
+
+    return urls;
+  }
+
+  function isDownloadableTemplateSource(value) {
+    const source = String(value || "").trim();
+    if (!source) {
+      return false;
+    }
+
+    return (
+      /^https?:\/\//i.test(source) ||
+      /^blob:/i.test(source) ||
+      /^data:image\//i.test(source) ||
+      /^filesystem:/i.test(source)
+    );
+  }
+
+  function toFiniteNumber(value, fallback = 0) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  }
+
+  function isLikelyPlaceholderSource(value) {
+    const source = String(value || "").trim().toLowerCase();
+    if (!source) {
+      return true;
+    }
+
+    if (
+      source.includes("/blank-") ||
+      source.includes("/blank.") ||
+      source.includes("placeholder") ||
+      source.includes("transparent")
+    ) {
+      return true;
+    }
+
+    if (source.startsWith("data:image/png;base64,ivborw0kggoaaaansuheugaaaaeaaaab")) {
+      return true;
+    }
+
+    return false;
+  }
+
+  function normalizePlaceitCustomGraphicEntries(rawAssets) {
+    const entries = Array.isArray(rawAssets?.customGraphics) ? rawAssets.customGraphics : [];
+    const normalized = [];
+
+    for (const [index, entry] of entries.entries()) {
+      if (!entry || typeof entry !== "object") {
+        continue;
+      }
+
+      const key = String(entry.key || "").trim();
+      const token = String(entry.token || "").trim();
+      const sources = Array.isArray(entry.sources)
+        ? entry.sources
+            .filter((source) => typeof source === "string" && isDownloadableTemplateSource(source))
+            .map((source) => source.trim())
+        : [];
+      const previewUrl =
+        typeof entry.previewUrl === "string" && isDownloadableTemplateSource(entry.previewUrl)
+          ? entry.previewUrl.trim()
+          : "";
+      const sourceUrl = sources[0] || previewUrl;
+
+      if (!sourceUrl) {
+        continue;
+      }
+
+      normalized.push({
+        id: `${key || "customG"}-${token || "token"}-${index + 1}`,
+        key,
+        token,
+        inputId: String(entry.inputId || "").trim(),
+        pixelWidth: Math.max(0, Math.round(toFiniteNumber(entry.pixelWidth, 0))),
+        pixelHeight: Math.max(0, Math.round(toFiniteNumber(entry.pixelHeight, 0))),
+        sourceUrl,
+        sources: Array.from(new Set([sourceUrl, ...sources])),
+      });
+    }
+
+    return normalized;
+  }
+
+  function getLayerPrimarySource(layer) {
+    if (Array.isArray(layer?.sources)) {
+      const source = layer.sources.find((item) => typeof item === "string" && item.trim());
+      if (source) {
+        return source.trim();
+      }
+    }
+
+    if (typeof layer?.imageUrl === "string" && layer.imageUrl.trim()) {
+      return layer.imageUrl.trim();
+    }
+
+    return "";
+  }
+
+  function getLayerAspectRatio(layer) {
+    const rect = layer?.rect || {};
+    const width = Math.max(0, toFiniteNumber(layer?.layoutWidth, toFiniteNumber(rect.width, 0)));
+    const height = Math.max(0, toFiniteNumber(layer?.layoutHeight, toFiniteNumber(rect.height, 0)));
+
+    if (width <= 0 || height <= 0) {
+      return 0;
+    }
+
+    return width / height;
+  }
+
+  function getGraphicAspectRatio(graphic) {
+    const width = Math.max(0, toFiniteNumber(graphic?.pixelWidth, 0));
+    const height = Math.max(0, toFiniteNumber(graphic?.pixelHeight, 0));
+
+    if (width <= 0 || height <= 0) {
+      return 0;
+    }
+
+    return width / height;
+  }
+
+  function pickBestPlaceitGraphicForLayer(layer, graphics, usedGraphicIds) {
+    if (!Array.isArray(graphics) || graphics.length === 0) {
+      return null;
+    }
+
+    const selector = String(layer?.selector || "").toLowerCase();
+    const layerRatio = getLayerAspectRatio(layer);
+    let best = null;
+
+    for (const graphic of graphics) {
+      if (!graphic || usedGraphicIds.has(graphic.id)) {
+        continue;
+      }
+
+      let score = 0;
+      if (graphic.key && selector.includes(graphic.key.toLowerCase())) {
+        score += 6;
+      }
+
+      const graphicRatio = getGraphicAspectRatio(graphic);
+      if (layerRatio > 0 && graphicRatio > 0) {
+        const ratioDelta = Math.abs(Math.log(layerRatio / graphicRatio));
+        score += Math.max(0, 3 - ratioDelta * 4);
+      }
+
+      if (!best || score > best.score) {
+        best = { graphic, score };
+      }
+    }
+
+    return best && best.score >= 0.05 ? best.graphic : null;
+  }
+
+  function applyPlaceitCustomGraphicsToLayers(layers, rawAssets) {
+    const graphics = normalizePlaceitCustomGraphicEntries(rawAssets);
+    if (!Array.isArray(layers) || layers.length === 0 || graphics.length === 0) {
+      return { appliedCount: 0, graphics };
+    }
+
+    const usedGraphicIds = new Set();
+    let appliedCount = 0;
+
+    for (const layer of layers) {
+      if (String(layer?.role || "").toLowerCase() !== "image") {
+        continue;
+      }
+
+      const primarySource = getLayerPrimarySource(layer);
+      if (!isLikelyPlaceholderSource(primarySource)) {
+        continue;
+      }
+
+      const bestGraphic = pickBestPlaceitGraphicForLayer(layer, graphics, usedGraphicIds);
+      if (!bestGraphic) {
+        continue;
+      }
+
+      layer.sources = Array.from(new Set([bestGraphic.sourceUrl]));
+      layer.imageUrl = bestGraphic.sourceUrl;
+      layer.replaceable = true;
+      layer.sourceOverride = "placeitCustomGraphic";
+      layer.placeitCustomGraphicKey = bestGraphic.key;
+      layer.placeitCustomGraphicToken = bestGraphic.token;
+      usedGraphicIds.add(bestGraphic.id);
+      appliedCount += 1;
+    }
+
+    return { appliedCount, graphics };
+  }
+
   function collectAnalysisAssetUrls(rawAnalysis, compactAnalysis) {
     const urls = new Set();
     const compactAssets = compactAnalysis?.assets || {};
@@ -278,11 +569,30 @@ export function createPopupActions(state, elements, renderer, logs) {
     for (const source of [
       ...(compactAssets.imageUrls || []),
       ...(compactAssets.backgroundImageUrls || []),
+      ...(compactAssets.placeitCustomGraphicUrls || []),
       ...(rawAssets.imageUrls || []),
       ...(rawAssets.backgroundImageUrls || []),
+      ...(rawAssets.placeitCustomGraphicUrls || []),
     ]) {
       if (source) {
         urls.add(source);
+      }
+    }
+
+    const customGraphics = Array.isArray(rawAssets?.customGraphics)
+      ? rawAssets.customGraphics
+      : [];
+    for (const entry of customGraphics) {
+      if (entry?.previewUrl) {
+        urls.add(entry.previewUrl);
+      }
+
+      if (Array.isArray(entry?.sources)) {
+        for (const source of entry.sources) {
+          if (source) {
+            urls.add(source);
+          }
+        }
       }
     }
 
@@ -362,7 +672,7 @@ export function createPopupActions(state, elements, renderer, logs) {
     const nextTemplate = cloneTemplate(baseTemplate);
     const imageUrls = Array.isArray(analysisObject?.assets?.imageUrls)
       ? analysisObject.assets.imageUrls.filter(
-          (url) => typeof url === "string" && /^https?:\/\//i.test(url),
+          (url) => typeof url === "string" && isDownloadableTemplateSource(url),
         )
       : [];
 
@@ -419,13 +729,14 @@ export function createPopupActions(state, elements, renderer, logs) {
       itemsByKey.set(key, item);
     };
     const addUrlItem = (url, label = "") => {
-      if (typeof url !== "string" || !/^https?:\/\//i.test(url)) {
+      if (!isDownloadableTemplateSource(url)) {
         return;
       }
-      pushItem(`url:${url}`, {
-        key: `url:${url}`,
-        url,
-        previewUrl: url,
+      const normalizedUrl = String(url).trim();
+      pushItem(`url:${normalizedUrl}`, {
+        key: `url:${normalizedUrl}`,
+        url: normalizedUrl,
+        previewUrl: normalizedUrl,
         label,
       });
     };
@@ -435,10 +746,24 @@ export function createPopupActions(state, elements, renderer, logs) {
     for (const source of [
       ...(compactAssets.imageUrls || []),
       ...(compactAssets.backgroundImageUrls || []),
+      ...(compactAssets.placeitCustomGraphicUrls || []),
       ...(rawAssets.imageUrls || []),
       ...(rawAssets.backgroundImageUrls || []),
+      ...(rawAssets.placeitCustomGraphicUrls || []),
     ]) {
       addUrlItem(source, "asset");
+    }
+
+    const customGraphics = Array.isArray(rawAssets?.customGraphics)
+      ? rawAssets.customGraphics
+      : [];
+    for (const entry of customGraphics) {
+      addUrlItem(entry?.previewUrl, "customG");
+      if (Array.isArray(entry?.sources)) {
+        for (const source of entry.sources) {
+          addUrlItem(source, "customG");
+        }
+      }
     }
 
     const rawLayers = Array.isArray(rawAnalysis?.layers) ? rawAnalysis.layers : [];
@@ -459,8 +784,15 @@ export function createPopupActions(state, elements, renderer, logs) {
         }
       }
 
+      for (const source of extractCssUrls(layer?.backgroundImage)) {
+        addUrlItem(source, "background");
+      }
+
       const maskUrl = extractFirstCssUrl(layer?.maskImage) || layer?.maskSource || "";
-      if (!maskUrl || !/^https?:\/\//i.test(maskUrl)) {
+      if (!isDownloadableTemplateSource(maskUrl)) {
+        for (const source of extractCssUrls(layer?.maskImage)) {
+          addUrlItem(source, "mask");
+        }
         continue;
       }
 
@@ -490,23 +822,47 @@ export function createPopupActions(state, elements, renderer, logs) {
     for (const layer of layers) {
       if (Array.isArray(layer?.sources)) {
         for (const source of layer.sources) {
-          if (source && /^https?:\/\//i.test(String(source))) {
-            urls.add(source);
+          if (isDownloadableTemplateSource(source)) {
+            urls.add(String(source).trim());
           }
         }
       }
 
-      if (typeof layer?.imageUrl === "string" && /^https?:\/\//i.test(layer.imageUrl)) {
-        urls.add(layer.imageUrl);
+      if (isDownloadableTemplateSource(layer?.imageUrl)) {
+        urls.add(String(layer.imageUrl).trim());
       }
 
-      if (typeof layer?.maskSource === "string" && /^https?:\/\//i.test(layer.maskSource)) {
-        urls.add(layer.maskSource);
+      if (isDownloadableTemplateSource(layer?.maskSource)) {
+        urls.add(String(layer.maskSource).trim());
       }
 
-      const maskUrl = extractFirstCssUrl(layer?.maskImage);
-      if (maskUrl && /^https?:\/\//i.test(maskUrl)) {
-        urls.add(maskUrl);
+      for (const cssUrl of extractCssUrls(layer?.maskImage)) {
+        if (isDownloadableTemplateSource(cssUrl)) {
+          urls.add(cssUrl);
+        }
+      }
+
+      for (const cssUrl of extractCssUrls(layer?.backgroundImage)) {
+        if (isDownloadableTemplateSource(cssUrl)) {
+          urls.add(cssUrl);
+        }
+      }
+    }
+
+    const placeitCustomGraphics = Array.isArray(templateObject?.placeit?.customGraphics)
+      ? templateObject.placeit.customGraphics
+      : [];
+    for (const entry of placeitCustomGraphics) {
+      if (entry?.sourceUrl) {
+        urls.add(String(entry.sourceUrl).trim());
+      }
+
+      if (Array.isArray(entry?.sources)) {
+        for (const source of entry.sources) {
+          if (isDownloadableTemplateSource(source)) {
+            urls.add(String(source).trim());
+          }
+        }
       }
     }
 
@@ -542,6 +898,7 @@ export function createPopupActions(state, elements, renderer, logs) {
         const sources = [
           layer?.imageUrl,
           ...(Array.isArray(layer?.backgroundImageUrls) ? layer.backgroundImageUrls : []),
+          ...extractCssUrls(layer?.backgroundImage),
         ].filter(Boolean);
         const maskSource = extractFirstCssUrl(layer?.maskImage);
 
@@ -550,6 +907,14 @@ export function createPopupActions(state, elements, renderer, logs) {
           role: layer?.role || "unknown",
           selector: layer?.selector || "",
           tagName: layer?.tagName || "",
+          imageSourceType: layer?.imageSourceType || "",
+          canvasReadable: layer?.canvasReadable !== false,
+          canvasWidth: Number.isFinite(Number(layer?.canvasWidth))
+            ? Number(layer.canvasWidth)
+            : undefined,
+          canvasHeight: Number.isFinite(Number(layer?.canvasHeight))
+            ? Number(layer.canvasHeight)
+            : undefined,
           rect: layer?.relativeRect || layer?.rect || {},
           layoutWidth: Number.isFinite(Number(layer?.layoutWidth))
             ? Number(layer.layoutWidth)
@@ -589,6 +954,7 @@ export function createPopupActions(state, elements, renderer, logs) {
         };
       },
     );
+    const placeitApplied = applyPlaceitCustomGraphicsToLayers(layers, rawAnalysis?.assets);
 
     const replaceableLayers = layers
       .filter((layer) => layer.replaceable)
@@ -670,6 +1036,7 @@ export function createPopupActions(state, elements, renderer, logs) {
           height: Number.isFinite(sourceRect.height) ? sourceRect.height : 0,
         },
       },
+      captureSelection: normalizeCaptureSelection(rawAnalysis?.captureSelection) || undefined,
       canvas: {
         width: canvasWidth,
         height: canvasHeight,
@@ -677,6 +1044,46 @@ export function createPopupActions(state, elements, renderer, logs) {
       },
       styles: rawAnalysis?.styles || {},
       typography: rawAnalysis?.typography || {},
+      placeitV4:
+        rawAnalysis?.placeitV4 &&
+        typeof rawAnalysis.placeitV4 === "object" &&
+        !Array.isArray(rawAnalysis.placeitV4) &&
+        String(rawAnalysis.placeitV4.smartObjectV4Id || "").trim()
+          ? {
+              smartObjectV4Id: String(rawAnalysis.placeitV4.smartObjectV4Id || "").trim(),
+              uiJsonUrl: String(rawAnalysis.placeitV4.uiJsonUrl || "").trim(),
+              structureJsonUrl: String(rawAnalysis.placeitV4.structureJsonUrl || "").trim(),
+              previewImageUrl: String(rawAnalysis.placeitV4.previewImageUrl || "").trim(),
+              stageImageUrl: String(rawAnalysis.placeitV4.stageImageUrl || "").trim(),
+              uiData:
+                rawAnalysis.placeitV4.uiData &&
+                typeof rawAnalysis.placeitV4.uiData === "object" &&
+                !Array.isArray(rawAnalysis.placeitV4.uiData)
+                  ? rawAnalysis.placeitV4.uiData
+                  : undefined,
+              structureData:
+                rawAnalysis.placeitV4.structureData &&
+                typeof rawAnalysis.placeitV4.structureData === "object" &&
+                !Array.isArray(rawAnalysis.placeitV4.structureData)
+                  ? rawAnalysis.placeitV4.structureData
+                  : undefined,
+            }
+          : undefined,
+      placeit:
+        placeitApplied.graphics.length > 0
+          ? {
+              customGraphics: placeitApplied.graphics.map((entry) => ({
+                key: entry.key,
+                token: entry.token,
+                inputId: entry.inputId,
+                pixelWidth: entry.pixelWidth,
+                pixelHeight: entry.pixelHeight,
+                sourceUrl: entry.sourceUrl,
+                sources: entry.sources,
+              })),
+              appliedLayerCount: placeitApplied.appliedCount,
+            }
+          : undefined,
       layers,
       replaceableLayers,
       notes: [
@@ -828,10 +1235,234 @@ export function createPopupActions(state, elements, renderer, logs) {
     }
 
     const urls = collectTemplateAssetUrls(templateObject);
+    const placeitV4 =
+      templateObject?.placeitV4 &&
+      typeof templateObject.placeitV4 === "object" &&
+      !Array.isArray(templateObject.placeitV4)
+        ? templateObject.placeitV4
+        : null;
+    const placeitGraphics = Array.isArray(templateObject?.placeit?.customGraphics)
+      ? templateObject.placeit.customGraphics
+      : [];
+    const userUploadUrls = new Set();
+    const thumbnailUrls = new Set();
 
-    return Array.from(urls).filter(
-      (url) => typeof url === "string" && /^https?:\/\//i.test(url),
+    for (const entry of placeitGraphics) {
+      const sources = Array.isArray(entry?.sources) ? entry.sources : [];
+      for (const source of sources) {
+        const normalized = String(source || "").trim();
+        if (!normalized) {
+          continue;
+        }
+        if (/\/user_image\.(png|jpg|jpeg|webp|avif)(?:[?#].*)?$/i.test(normalized)) {
+          userUploadUrls.add(normalized);
+        }
+        if (/\/thumbnail\.(png|jpg|jpeg|webp|avif)(?:[?#].*)?$/i.test(normalized)) {
+          thumbnailUrls.add(normalized);
+        }
+      }
+
+      if (typeof entry?.sourceUrl === "string" && entry.sourceUrl.trim()) {
+        userUploadUrls.add(entry.sourceUrl.trim());
+      }
+
+      if (typeof entry?.previewUrl === "string" && entry.previewUrl.trim()) {
+        thumbnailUrls.add(entry.previewUrl.trim());
+      }
+    }
+
+    return Array.from(urls).filter((url) => {
+      if (!isDownloadableTemplateSource(url)) {
+        return false;
+      }
+
+      const normalized = String(url).trim();
+      if (!normalized) {
+        return false;
+      }
+
+      if (placeitV4?.smartObjectV4Id) {
+        if (/^data:image\//i.test(normalized)) {
+          return false;
+        }
+        if (
+          normalized === String(placeitV4.previewImageUrl || "").trim() ||
+          normalized === String(placeitV4.stageImageUrl || "").trim()
+        ) {
+          return false;
+        }
+        if (thumbnailUrls.has(normalized) && userUploadUrls.size > 0) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }
+
+  function normalizeCaptureSelection(value) {
+    if (!value || typeof value !== "object") {
+      return null;
+    }
+
+    const left = Number(value.left);
+    const top = Number(value.top);
+    const width = Number(value.width);
+    const height = Number(value.height);
+    const viewportWidth = Number(value.viewportWidth);
+    const viewportHeight = Number(value.viewportHeight);
+
+    if (
+      !Number.isFinite(left) ||
+      !Number.isFinite(top) ||
+      !Number.isFinite(width) ||
+      !Number.isFinite(height) ||
+      !Number.isFinite(viewportWidth) ||
+      !Number.isFinite(viewportHeight) ||
+      width <= 1 ||
+      height <= 1 ||
+      viewportWidth <= 1 ||
+      viewportHeight <= 1
+    ) {
+      return null;
+    }
+
+    return {
+      left: Math.max(0, Math.round(left)),
+      top: Math.max(0, Math.round(top)),
+      width: Math.max(1, Math.round(width)),
+      height: Math.max(1, Math.round(height)),
+      viewportWidth: Math.max(1, Math.round(viewportWidth)),
+      viewportHeight: Math.max(1, Math.round(viewportHeight)),
+    };
+  }
+
+  function getCanvasFallbackTargetLayer(templateObject) {
+    const layers = Array.isArray(templateObject?.layers) ? templateObject.layers : [];
+    return (
+      layers.find((layer) => {
+        if (String(layer?.imageSourceType || "") !== "canvas") {
+          return false;
+        }
+
+        return !Array.isArray(layer?.sources) || layer.sources.length === 0;
+      }) || null
     );
+  }
+
+  async function captureCanvasFallbackDataUrl(selection, sourceContext) {
+    const response = await chrome.runtime.sendMessage({
+      action: ACTIONS.CAPTURE_VISIBLE_TAB,
+      windowId: sourceContext.windowId,
+      returnDataUrl: true,
+      selection,
+    });
+
+    const dataUrl = String(response?.dataUrl || "");
+    if (!response?.ok || !/^data:image\//i.test(dataUrl)) {
+      throw new Error(response?.error || "No s'ha pogut capturar el bloc per al fallback de canvas.");
+    }
+
+    return dataUrl;
+  }
+
+  async function applyCanvasFallbackIfNeeded(templateObject, analysisObject, sourceContext) {
+    if (
+      templateObject?.placeitV4 &&
+      typeof templateObject.placeitV4 === "object" &&
+      !Array.isArray(templateObject.placeitV4) &&
+      String(templateObject.placeitV4.smartObjectV4Id || "").trim()
+    ) {
+      return false;
+    }
+
+    const selection =
+      normalizeCaptureSelection(analysisObject?.captureSelection) ||
+      normalizeCaptureSelection(state.rawElementAnalysis?.captureSelection);
+    if (!selection) {
+      return false;
+    }
+
+    const rawAssets = state.rawElementAnalysis?.assets || {};
+    const compactAssets = analysisObject?.assets || {};
+    const hasCanvasSignal =
+      compactAssets.hasCanvasLayer === true ||
+      compactAssets.hasUnreadableCanvasLayer === true ||
+      rawAssets.hasCanvasLayer === true ||
+      rawAssets.hasUnreadableCanvasLayer === true;
+    const targetLayer = getCanvasFallbackTargetLayer(templateObject);
+
+    if (!targetLayer && !hasCanvasSignal) {
+      return false;
+    }
+
+    const fallbackDataUrl = await captureCanvasFallbackDataUrl(selection, sourceContext);
+    if (targetLayer) {
+      targetLayer.sources = [fallbackDataUrl];
+      targetLayer.imageUrl = fallbackDataUrl;
+      targetLayer.replaceable = true;
+      targetLayer.canvasReadable = false;
+      targetLayer.fallbackSource = "captureVisibleTab";
+      return true;
+    }
+
+    const layers = Array.isArray(templateObject.layers) ? templateObject.layers : [];
+    const contentBounds = templateObject?.canvas?.contentBounds || {};
+    const fallbackRect = {
+      x: Number.isFinite(Number(contentBounds.x)) ? Number(contentBounds.x) : 0,
+      y: Number.isFinite(Number(contentBounds.y)) ? Number(contentBounds.y) : 0,
+      width: Number.isFinite(Number(contentBounds.width))
+        ? Math.max(1, Number(contentBounds.width))
+        : Math.max(1, selection.width),
+      height: Number.isFinite(Number(contentBounds.height))
+        ? Math.max(1, Number(contentBounds.height))
+        : Math.max(1, selection.height),
+    };
+    const nextIndex = layers.length + 1;
+    const syntheticLayer = {
+      id: `layer_canvas_fallback_${nextIndex}`,
+      role: "image",
+      selector: analysisObject?.element?.selector || state.rawElementAnalysis?.element?.selector || "",
+      tagName: "canvas",
+      imageSourceType: "canvas",
+      canvasReadable: false,
+      rect: fallbackRect,
+      zIndex: 99999,
+      opacity: "1",
+      transform: "none",
+      transformOrigin: "50% 50%",
+      blendMode: "normal",
+      borderRadius: "0px",
+      objectFit: "fill",
+      objectPosition: "50% 50%",
+      backgroundSize: "",
+      backgroundPosition: "",
+      backgroundRepeat: "",
+      textColor: "",
+      fontFamily: "",
+      fontSize: "",
+      fontWeight: "",
+      fontStyle: "",
+      lineHeight: "",
+      letterSpacing: "",
+      textAlign: "",
+      backgroundColor: "",
+      backgroundImage: "",
+      text: "",
+      maskImage: "",
+      maskSize: "",
+      maskPosition: "",
+      maskRepeat: "",
+      maskSource: "",
+      sources: [fallbackDataUrl],
+      replaceable: true,
+      fallbackSource: "captureVisibleTab",
+    };
+
+    layers.push(syntheticLayer);
+    templateObject.layers = layers;
+    return true;
+
   }
 
   async function getActiveTab() {
@@ -847,8 +1478,42 @@ export function createPopupActions(state, elements, renderer, logs) {
     return getActiveTab();
   }
 
-  async function getSourceContext() {
-    const tab = await getSourceTab();
+  async function getCurrentBrowserTab() {
+    const windows = await chrome.windows.getAll({
+      populate: true,
+      windowTypes: ["normal"],
+    });
+
+    if (!Array.isArray(windows) || windows.length === 0) {
+      return null;
+    }
+
+    const bySourceWindow = Number.isInteger(state.sourceWindowId)
+      ? windows.find((windowItem) => windowItem.id === state.sourceWindowId)
+      : null;
+    const focusedWindow = windows.find((windowItem) => windowItem.focused);
+    const preferredWindow = focusedWindow || bySourceWindow || windows[0];
+    const preferredActiveTab = preferredWindow?.tabs?.find((tab) => tab.active);
+
+    if (preferredActiveTab?.id && Number.isInteger(preferredActiveTab.windowId)) {
+      return preferredActiveTab;
+    }
+
+    for (const windowItem of windows) {
+      const activeTab = windowItem?.tabs?.find((tab) => tab.active);
+      if (activeTab?.id && Number.isInteger(activeTab.windowId)) {
+        return activeTab;
+      }
+    }
+
+    return null;
+  }
+
+  async function getSourceContext(options = {}) {
+    const preferCurrentBrowserTab = options?.preferCurrentBrowserTab === true;
+    const tab = preferCurrentBrowserTab
+      ? (await getCurrentBrowserTab()) || (await getSourceTab())
+      : await getSourceTab();
 
     if (!tab?.id || !Number.isInteger(tab.windowId)) {
       throw new Error("No s'ha pogut detectar la pestanya activa.");
@@ -871,7 +1536,7 @@ export function createPopupActions(state, elements, renderer, logs) {
     elements.downloadButton.disabled = true;
 
     try {
-      const { tabId } = await getSourceContext();
+      const { tabId } = await getSourceContext({ preferCurrentBrowserTab: true });
 
       const [{ result: images = [] } = {}] = await chrome.scripting.executeScript({
         target: { tabId },
@@ -1053,7 +1718,12 @@ export function createPopupActions(state, elements, renderer, logs) {
     const setAnalyzeButtonActive = (active) => {
       state.analysisInProgress = active;
       elements.analyzeElementButton.classList.toggle("secondary-button--active", active);
+      elements.mockupQuickAnalyzeButton.classList.toggle("secondary-button--active", active);
       elements.analyzeElementButton.setAttribute("aria-pressed", active ? "true" : "false");
+      elements.mockupQuickAnalyzeButton.setAttribute(
+        "aria-pressed",
+        active ? "true" : "false",
+      );
     };
 
     debugLog("analyzeElement: inici");
@@ -1127,6 +1797,7 @@ export function createPopupActions(state, elements, renderer, logs) {
 
   function handleAnalysisEditorInput() {
     if (!state.elementAnalysis) {
+      renderer.setAnalysisReadyState(false);
       return;
     }
 
@@ -1137,7 +1808,7 @@ export function createPopupActions(state, elements, renderer, logs) {
       renderer.renderAnalysisSvgPreview();
       elements.copyAnalysisButton.disabled = true;
       elements.saveAnalysisButton.disabled = true;
-      elements.downloadBlockBundleButton.disabled = true;
+      renderer.setAnalysisReadyState(false);
       return;
     }
 
@@ -1149,13 +1820,13 @@ export function createPopupActions(state, elements, renderer, logs) {
       state.elementSvgPreviewUrl = "";
       renderer.renderAnalysisDetectedAssets([]);
       renderer.renderAnalysisSvgPreview();
-      elements.downloadBlockBundleButton.disabled = true;
+      renderer.setAnalysisReadyState(false);
       return;
     }
 
-    elements.downloadBlockBundleButton.disabled = false;
-
     const template = resolveTemplateFromAnalysisObject(parsed);
+    renderer.setAnalysisReadyState(Boolean(template));
+
     if (template) {
       state.elementSvgPreviewUrl = buildSvgPreviewDataUrl(template);
     } else {
@@ -1221,6 +1892,10 @@ export function createPopupActions(state, elements, renderer, logs) {
   }
 
   async function downloadBlockBundle() {
+    const analysisObject =
+      getCurrentAnalysisObject({
+        reportErrors: false,
+      }) || state.rawElementAnalysis;
     const templateObject = getTemplateObject();
 
     if (!templateObject) {
@@ -1228,19 +1903,45 @@ export function createPopupActions(state, elements, renderer, logs) {
       return;
     }
 
+    let sourceContext = null;
+    const getSourceContextOnce = async () => {
+      if (sourceContext) {
+        return sourceContext;
+      }
+
+      sourceContext = await getSourceContext();
+      return sourceContext;
+    };
+
+    let appliedCanvasFallback = false;
+    try {
+      appliedCanvasFallback = await applyCanvasFallbackIfNeeded(
+        templateObject,
+        analysisObject,
+        await getSourceContextOnce(),
+      );
+    } catch (error) {
+      debugError("no s'ha pogut aplicar fallback de canvas", error);
+      logs.push("warn", "No s'ha pogut capturar el bloc de canvas automaticament.", {
+        message: getErrorMessage(error),
+      });
+    }
+
     const urls = collectBlockDownloadUrls(templateObject);
 
     if (urls.length === 0) {
       elements.statusMessage.textContent =
-        "No s'han detectat imatges HTTP/HTTPS dins del bloc analitzat.";
+        "No s'han detectat assets descarregables dins del bloc analitzat.";
       return;
     }
 
     elements.downloadBlockBundleButton.disabled = true;
-    elements.statusMessage.textContent = `Preparant ZIP del bloc (${urls.length} imatges + plantilla JSON/SVG)...`;
+    elements.mockupQuickZipButton.disabled = true;
+    const fallbackSuffix = appliedCanvasFallback ? " + fallback canvas" : "";
+    elements.statusMessage.textContent = `Preparant ZIP del bloc (${urls.length} imatges + plantilla JSON/SVG${fallbackSuffix})...`;
 
     try {
-      const sourceContext = await getSourceContext();
+      const currentSourceContext = await getSourceContextOnce();
       const response = await chrome.runtime.sendMessage({
         action: ACTIONS.DOWNLOAD_IMAGES,
         urls,
@@ -1252,8 +1953,8 @@ export function createPopupActions(state, elements, renderer, logs) {
           enabled: false,
           factor: 2,
         },
-        tabId: sourceContext.tabId,
-        windowId: sourceContext.windowId,
+        tabId: currentSourceContext.tabId,
+        windowId: currentSourceContext.windowId,
       });
 
       if (!response?.ok) {
@@ -1276,7 +1977,11 @@ export function createPopupActions(state, elements, renderer, logs) {
         count: urls.length,
       });
     } finally {
-      elements.downloadBlockBundleButton.disabled = !state.elementAnalysis;
+      const currentAnalysis = getCurrentAnalysisObject({
+        reportErrors: false,
+      });
+      const canExport = Boolean(resolveTemplateFromAnalysisObject(currentAnalysis));
+      renderer.setAnalysisReadyState(canExport);
     }
   }
 

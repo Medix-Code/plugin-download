@@ -27,6 +27,9 @@ export {
   normalizeUpscaleOptions,
 };
 
+const MAX_SAFE_AFFINE_LAYOUT_RATIO = 1.8;
+const MIN_SAFE_AFFINE_LAYOUT_RATIO = 0.55;
+
 async function queueIndividualDownloads(urls, options = {}) {
   for (const [index, url] of urls.entries()) {
     await downloadFromUrlWithFallback(url, buildFilename(url, index), options);
@@ -69,6 +72,631 @@ function normalizeArchiveTemplate(template) {
   }
 
   return template;
+}
+
+function normalizeAbsoluteUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return "";
+  }
+
+  try {
+    return new URL(raw).href;
+  } catch {
+    return "";
+  }
+}
+
+function resolveUrlFromBase(baseUrl, value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return "";
+  }
+
+  try {
+    return new URL(raw, baseUrl).href;
+  } catch {
+    return "";
+  }
+}
+
+function normalizePlaceitV4Info(template) {
+  const raw = template?.placeitV4;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return null;
+  }
+
+  const smartObjectV4Id = String(raw.smartObjectV4Id || "").trim();
+  const fallbackBaseUrl = smartObjectV4Id
+    ? `https://nice-assets-1-p.cdn.aws.placeit.net/smart_templates/${encodeURIComponent(
+        smartObjectV4Id,
+      )}/`
+    : "";
+  const uiJsonUrl =
+    normalizeAbsoluteUrl(raw.uiJsonUrl) ||
+    (fallbackBaseUrl ? new URL("ui.json", fallbackBaseUrl).href : "");
+  const structureJsonUrl =
+    normalizeAbsoluteUrl(raw.structureJsonUrl) ||
+    (fallbackBaseUrl ? new URL("structure.json", fallbackBaseUrl).href : "");
+  const assetsBaseUrl =
+    (structureJsonUrl && new URL("./", structureJsonUrl).href) ||
+    (uiJsonUrl && new URL("./", uiJsonUrl).href) ||
+    fallbackBaseUrl;
+
+  if (!smartObjectV4Id && !uiJsonUrl && !structureJsonUrl) {
+    return null;
+  }
+
+  return {
+    smartObjectV4Id,
+    uiJsonUrl,
+    structureJsonUrl,
+    assetsBaseUrl,
+    previewImageUrl: normalizeAbsoluteUrl(raw.previewImageUrl),
+    stageImageUrl: normalizeAbsoluteUrl(raw.stageImageUrl),
+    embeddedUiData:
+      raw.uiData && typeof raw.uiData === "object" && !Array.isArray(raw.uiData)
+        ? raw.uiData
+        : null,
+    embeddedStructureData:
+      raw.structureData &&
+      typeof raw.structureData === "object" &&
+      !Array.isArray(raw.structureData)
+        ? raw.structureData
+        : null,
+  };
+}
+
+async function fetchJsonDocument(url) {
+  const response = await fetch(url, {
+    credentials: "omit",
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(`No s'ha pogut carregar ${url} (${response.status}).`);
+  }
+  return response.json();
+}
+
+async function fetchBinaryAsset(url) {
+  const response = await fetch(url, {
+    credentials: "omit",
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(`No s'ha pogut descarregar ${url} (${response.status}).`);
+  }
+
+  const blob = await response.blob();
+  return {
+    blob,
+    bytes: new Uint8Array(await blob.arrayBuffer()),
+  };
+}
+
+function buildUniqueArchiveEntryName(rawName, usedNames) {
+  const trimmed = String(rawName || "").trim();
+  const fallback = trimmed || "asset.bin";
+  const extensionMatch = fallback.match(/(\.[^.]+)$/);
+  const extension = extensionMatch ? extensionMatch[1] : "";
+  const base = extension ? fallback.slice(0, -extension.length) : fallback;
+  let candidate = fallback;
+  let counter = 2;
+
+  while (usedNames.has(candidate)) {
+    candidate = `${base}_${counter}${extension}`;
+    counter += 1;
+  }
+
+  usedNames.add(candidate);
+  return candidate;
+}
+
+function inferExtensionFromMimeType(mimeType) {
+  const normalized = String(mimeType || "").toLowerCase();
+  if (!normalized) {
+    return "";
+  }
+  if (normalized.includes("image/svg")) {
+    return "svg";
+  }
+  if (normalized.includes("image/png")) {
+    return "png";
+  }
+  if (normalized.includes("image/jpeg")) {
+    return "jpg";
+  }
+  if (normalized.includes("image/webp")) {
+    return "webp";
+  }
+  if (normalized.includes("image/avif")) {
+    return "avif";
+  }
+  return "";
+}
+
+function inferPlaceitFontWeight(fontName, fallback = 400) {
+  const value = String(fontName || "").toLowerCase();
+  if (!value) {
+    return String(fallback);
+  }
+  if (value.includes("black")) {
+    return "900";
+  }
+  if (value.includes("extrabold") || value.includes("ultrabold")) {
+    return "800";
+  }
+  if (value.includes("semibold") || value.includes("demibold")) {
+    return "600";
+  }
+  if (value.includes("bold")) {
+    return "700";
+  }
+  if (value.includes("medium")) {
+    return "500";
+  }
+  if (value.includes("light")) {
+    return "300";
+  }
+  return String(fallback);
+}
+
+function mapPlaceitTextAlign(justification) {
+  const normalized = String(justification || "").trim().toUpperCase();
+  if (normalized === "CENTER") {
+    return "center";
+  }
+  if (normalized === "RIGHT") {
+    return "right";
+  }
+  return "left";
+}
+
+function buildPlaceitAffineFromTransformPoints(transformPoints, layoutWidth, layoutHeight) {
+  if (!Array.isArray(transformPoints) || transformPoints.length < 8) {
+    return null;
+  }
+
+  const points = transformPoints
+    .slice(0, 8)
+    .map((value) => Number(value));
+  if (points.some((value) => !Number.isFinite(value))) {
+    return null;
+  }
+
+  const width = Math.max(0, Number(layoutWidth));
+  const height = Math.max(0, Number(layoutHeight));
+  if (width <= 0 || height <= 0) {
+    return null;
+  }
+
+  const [x0, y0, x1, y1, x2, y2, x3, y3] = points;
+  const a = (x1 - x0) / width;
+  const b = (y1 - y0) / width;
+  const c = (x3 - x0) / height;
+  const d = (y3 - y0) / height;
+  const e = x0;
+  const f = y0;
+  const minX = Math.min(x0, x1, x2, x3);
+  const minY = Math.min(y0, y1, y2, y3);
+  const maxX = Math.max(x0, x1, x2, x3);
+  const maxY = Math.max(y0, y1, y2, y3);
+
+  if (![a, b, c, d, e, f, minX, minY, maxX, maxY].every((value) => Number.isFinite(value))) {
+    return null;
+  }
+
+  return {
+    transform: `matrix(${roundNumber(a, 1000000)}, ${roundNumber(b, 1000000)}, ${roundNumber(c, 1000000)}, ${roundNumber(d, 1000000)}, ${roundNumber(e, 1000)}, ${roundNumber(f, 1000)})`,
+    rect: {
+      x: roundNumber(minX, 1000),
+      y: roundNumber(minY, 1000),
+      width: roundNumber(maxX - minX, 1000),
+      height: roundNumber(maxY - minY, 1000),
+    },
+    layoutWidth: width,
+    layoutHeight: height,
+  };
+}
+
+function resolvePlaceitAssetUrl(assetPath, assetsBaseUrl) {
+  const raw = String(assetPath || "").trim();
+  if (!raw) {
+    return "";
+  }
+
+  return resolveUrlFromBase(assetsBaseUrl || "https://nice-assets-1-p.cdn.aws.placeit.net/", raw);
+}
+
+function pickPlaceitCustomGraphicForLayer(template, nodeName) {
+  const graphics = Array.isArray(template?.placeit?.customGraphics)
+    ? template.placeit.customGraphics.filter((entry) => entry && typeof entry === "object")
+    : [];
+  if (graphics.length === 0) {
+    return null;
+  }
+
+  const match = String(nodeName || "").match(/userimage(\d+)/i);
+  const index = match?.[1] ? Math.max(0, Number.parseInt(match[1], 10) - 1) : 0;
+  return graphics[index] || graphics[0] || null;
+}
+
+function buildPlaceitLayerId(node, fallbackPrefix = "placeit") {
+  const idPart = sanitizeArchiveSegment(String(node?.id || "").trim()).slice(0, 24);
+  const namePart = sanitizeArchiveSegment(String(node?.name || "").trim()).slice(0, 32);
+  return [fallbackPrefix, idPart, namePart].filter(Boolean).join("_") || `${fallbackPrefix}_layer`;
+}
+
+function createPlaceitTemplateLayer(node, path, template, assetsBaseUrl) {
+  if (!node || typeof node !== "object" || node.visible === false) {
+    return null;
+  }
+
+  const name = String(node.name || "").trim();
+  if (!name) {
+    return null;
+  }
+  if (name === "Watermark" || name === "_system.square_checkered_layer") {
+    return null;
+  }
+
+  const selector = path.join(" > ");
+  const opacity = Math.max(0, Math.min(1, toFiniteNumber(node.opacity, 100) / 100));
+  const lowerSelector = selector.toLowerCase();
+  const type = String(node.type || "").trim();
+  const smartObject =
+    node.smartObject && typeof node.smartObject === "object" && !Array.isArray(node.smartObject)
+      ? node.smartObject
+      : null;
+  const baseLayer = {
+    id: buildPlaceitLayerId(node),
+    selector,
+    tagName: type.toLowerCase() || "div",
+    zIndex: 0,
+    opacity: String(opacity),
+    transform: "none",
+    transformOrigin: "",
+    blendMode: String(node?.styles?.blendOptions?.mode || "normal"),
+    borderRadius: "0px",
+    objectFit: "fill",
+    objectPosition: "50% 50%",
+    backgroundSize: "",
+    backgroundPosition: "",
+    backgroundRepeat: "",
+    textColor: "",
+    fontFamily: "",
+    fontSize: "",
+    fontWeight: "",
+    fontStyle: "",
+    lineHeight: "",
+    letterSpacing: "",
+    textAlign: "",
+    backgroundColor: "",
+    backgroundImage: "",
+    text: "",
+    maskImage: "",
+    maskSize: "",
+    maskPosition: "",
+    maskRepeat: "",
+    maskSource: "",
+    sources: [],
+    replaceable: false,
+  };
+
+  if (type === "SolidColor") {
+    return {
+      ...baseLayer,
+      role: "background",
+      rect: {
+        x: roundNumber(toFiniteNumber(node.x, 0), 1000),
+        y: roundNumber(toFiniteNumber(node.y, 0), 1000),
+        width: Math.max(1, roundNumber(toFiniteNumber(node.width, 0), 1000)),
+        height: Math.max(1, roundNumber(toFiniteNumber(node.height, 0), 1000)),
+      },
+      layoutWidth: Math.max(1, roundNumber(toFiniteNumber(node.width, 0), 1000)),
+      layoutHeight: Math.max(1, roundNumber(toFiniteNumber(node.height, 0), 1000)),
+      backgroundColor: String(node.color || "").trim(),
+    };
+  }
+
+  if (type === "Text") {
+    const fontSize = Math.max(8, roundNumber(toFiniteNumber(node.fontSize, 16), 1000));
+    const lineCount = Math.max(1, String(node.contents || "").split(/\r?\n/).length);
+    const rawHeight = Math.max(fontSize, toFiniteNumber(node.height, fontSize * lineCount));
+    return {
+      ...baseLayer,
+      role: "text",
+      rect: {
+        x: roundNumber(toFiniteNumber(node.x, 0), 1000),
+        y: roundNumber(toFiniteNumber(node.y, 0), 1000),
+        width: Math.max(1, roundNumber(toFiniteNumber(node.width, 0), 1000)),
+        height: Math.max(1, roundNumber(rawHeight, 1000)),
+      },
+      layoutWidth: Math.max(1, roundNumber(toFiniteNumber(node.width, 0), 1000)),
+      layoutHeight: Math.max(1, roundNumber(rawHeight, 1000)),
+      text: String(node.contents || ""),
+      textColor: String(node.color || "").trim(),
+      fontFamily: String(node.font || node.fontFamily || "sans-serif"),
+      fontSize: `${fontSize}px`,
+      fontWeight: inferPlaceitFontWeight(node.font || node.fontFamily, 400),
+      fontStyle: /italic/i.test(String(node.font || node.fontFamily || "")) ? "italic" : "normal",
+      lineHeight: `${Math.max(fontSize, rawHeight / lineCount)}px`,
+      textAlign: mapPlaceitTextAlign(node.justification),
+    };
+  }
+
+  let role = "image";
+  if (/placeit\.replace\./i.test(name)) {
+    role = "replaceable_screen";
+  } else if (lowerSelector.includes("background color")) {
+    role = "background";
+  } else if (lowerSelector.includes("backgrounds")) {
+    role = "background";
+  } else if (name.toLowerCase() === "base") {
+    role = "frame";
+  }
+
+  let imageUrl = "";
+  if (role === "replaceable_screen") {
+    const graphic = pickPlaceitCustomGraphicForLayer(template, name);
+    imageUrl =
+      normalizeAbsoluteUrl(graphic?.sourceUrl) ||
+      normalizeAbsoluteUrl(graphic?.previewUrl) ||
+      resolvePlaceitAssetUrl(smartObject?.image, assetsBaseUrl) ||
+      resolvePlaceitAssetUrl(node.image, assetsBaseUrl);
+  } else {
+    imageUrl =
+      resolvePlaceitAssetUrl(node.image, assetsBaseUrl) ||
+      resolvePlaceitAssetUrl(smartObject?.image, assetsBaseUrl);
+  }
+
+  const transformInfo = buildPlaceitAffineFromTransformPoints(
+    smartObject?.transform?.transformPoints,
+    smartObject?.width,
+    smartObject?.height,
+  );
+  const fallbackRect = {
+    x: roundNumber(toFiniteNumber(node.x, 0), 1000),
+    y: roundNumber(toFiniteNumber(node.y, 0), 1000),
+    width: Math.max(1, roundNumber(toFiniteNumber(node.width, smartObject?.width || 0), 1000)),
+    height: Math.max(1, roundNumber(toFiniteNumber(node.height, smartObject?.height || 0), 1000)),
+  };
+
+  if (!imageUrl && !String(node.color || "").trim()) {
+    return null;
+  }
+
+  return {
+    ...baseLayer,
+    role,
+    imageSourceType: role === "replaceable_screen" ? "placeit_v4_custom_graphic" : "placeit_v4_asset",
+    rect: transformInfo?.rect || fallbackRect,
+    layoutWidth: Math.max(
+      1,
+      roundNumber(toFiniteNumber(transformInfo?.layoutWidth, smartObject?.width || node.width || fallbackRect.width), 1000),
+    ),
+    layoutHeight: Math.max(
+      1,
+      roundNumber(toFiniteNumber(transformInfo?.layoutHeight, smartObject?.height || node.height || fallbackRect.height), 1000),
+    ),
+    transform: transformInfo?.transform || "none",
+    backgroundColor: !imageUrl ? String(node.color || "").trim() : "",
+    sources: imageUrl ? [imageUrl] : [],
+    imageUrl,
+    replaceable: role === "replaceable_screen",
+    fallbackSource: role === "replaceable_screen" ? "placeitV4" : "",
+  };
+}
+
+function buildPlaceitV4DerivedTemplate(template, structure, info) {
+  if (!structure || typeof structure !== "object" || Array.isArray(structure)) {
+    return null;
+  }
+
+  const width = Math.max(1, Math.round(toFiniteNumber(structure.width, 0)));
+  const height = Math.max(1, Math.round(toFiniteNumber(structure.height, 0)));
+  const layers = [];
+  let zIndex = 0;
+
+  const visit = (node, path = []) => {
+    if (!node || typeof node !== "object" || node.visible === false) {
+      return;
+    }
+
+    const name = String(node.name || node.id || "").trim() || `layer_${layers.length + 1}`;
+    const nextPath = [...path, name];
+    const type = String(node.type || "").trim();
+
+    if (type === "Document" || type === "Folder") {
+      const children = Array.isArray(node.layers) ? [...node.layers].reverse() : [];
+      for (const child of children) {
+        visit(child, nextPath);
+      }
+      return;
+    }
+
+    const layer = createPlaceitTemplateLayer(node, nextPath, template, info.assetsBaseUrl);
+    if (!layer) {
+      return;
+    }
+
+    layer.zIndex = zIndex;
+    zIndex += 1;
+    layers.push(layer);
+  };
+
+  const rootLayers = Array.isArray(structure.layers) ? [...structure.layers].reverse() : [];
+  for (const child of rootLayers) {
+    visit(child, [String(structure.name || "placeit")]);
+  }
+
+  if (layers.length === 0) {
+    return null;
+  }
+
+  const replaceableLayers = layers
+    .filter((layer) => layer.replaceable)
+    .map((layer) => ({
+      id: layer.id,
+      selector: layer.selector,
+      role: layer.role,
+      sources: Array.isArray(layer.sources) ? [...layer.sources] : [],
+    }));
+
+  return {
+    templateVersion: 1,
+    exportedAt: template?.exportedAt || new Date().toISOString(),
+    source: {
+      url: template?.source?.url || "",
+      title: template?.source?.title || "",
+    },
+    element: {
+      selector: template?.element?.selector || "",
+      tagName: template?.element?.tagName || "div",
+      size: {
+        width,
+        height,
+      },
+    },
+    captureSelection: template?.captureSelection || undefined,
+    canvas: {
+      width,
+      height,
+      contentBounds: {
+        x: 0,
+        y: 0,
+        width,
+        height,
+      },
+    },
+    styles: template?.styles || {},
+    typography: template?.typography || {},
+    placeitV4: {
+      ...info,
+      derivedFromStructure: true,
+    },
+    placeit: template?.placeit || undefined,
+    layers,
+    replaceableLayers,
+    notes: [
+      "Plantilla reconstruida des de structure.json de Placeit v4.",
+      "La capa replaceable_screen es la que has de re-enllacar a Inkscape.",
+      "La capa Watermark s'ha exclòs de l'export editable.",
+    ],
+  };
+}
+
+async function buildDerivedTemplateAssetEntries(
+  template,
+  sourceToFilenameMap,
+  sourceToSvgTextMap,
+) {
+  const layers = Array.isArray(template?.layers) ? template.layers : [];
+  if (layers.length === 0) {
+    return [];
+  }
+
+  const usedNames = new Set(
+    Array.from(sourceToFilenameMap.values()).filter((value) => typeof value === "string" && value),
+  );
+  const entries = [];
+
+  for (const [index, layer] of layers.entries()) {
+    const urls = Array.isArray(layer?.sources)
+      ? layer.sources.filter((value) => typeof value === "string" && value)
+      : [];
+
+    for (const url of urls) {
+      if (sourceToFilenameMap.has(url)) {
+        continue;
+      }
+
+      try {
+        const { blob, bytes } = await fetchBinaryAsset(url);
+        const extension =
+          getFileExtension(url) ||
+          inferExtensionFromMimeType(blob.type) ||
+          "bin";
+        const hint = sanitizeArchiveSegment(extractLayerNameHint(layer, index)).slice(0, 48);
+        const rawName = `${String(index + 1).padStart(2, "0")}_${hint || "asset"}.${extension}`;
+        const entryName = buildUniqueArchiveEntryName(rawName, usedNames);
+
+        entries.push({
+          name: entryName,
+          bytes,
+        });
+        sourceToFilenameMap.set(url, entryName);
+
+        if (extension === "svg" || String(blob.type || "").includes("image/svg")) {
+          try {
+            const rawSvgText = await blob.text();
+            sourceToSvgTextMap.set(url, rawSvgText);
+            sourceToSvgTextMap.set(entryName, rawSvgText);
+          } catch {
+            // Ignore invalid SVG bodies; the binary asset is still kept in the ZIP.
+          }
+        }
+      } catch (error) {
+        emitPluginLog("warning", "No s'ha pogut afegir un asset Placeit al ZIP.", {
+          url,
+          message: getErrorMessage(error),
+        });
+      }
+    }
+  }
+
+  return entries;
+}
+
+async function buildPlaceitV4ArchiveData(
+  template,
+  sourceToFilenameMap,
+  sourceToSvgTextMap,
+) {
+  const info = normalizePlaceitV4Info(template);
+  if (!info?.structureJsonUrl) {
+    return null;
+  }
+
+  try {
+    const [ui, structure] = await Promise.all([
+      info.embeddedUiData
+        ? Promise.resolve(info.embeddedUiData)
+        : info.uiJsonUrl
+          ? fetchJsonDocument(info.uiJsonUrl).catch(() => null)
+          : Promise.resolve(null),
+      info.embeddedStructureData
+        ? Promise.resolve(info.embeddedStructureData)
+        : fetchJsonDocument(info.structureJsonUrl),
+    ]);
+    const derivedTemplate = buildPlaceitV4DerivedTemplate(template, structure, {
+      ...info,
+      ui,
+    });
+    if (!derivedTemplate) {
+      return null;
+    }
+
+    const assetEntries = await buildDerivedTemplateAssetEntries(
+      derivedTemplate,
+      sourceToFilenameMap,
+      sourceToSvgTextMap,
+    );
+
+    return {
+      info,
+      ui,
+      structure,
+      derivedTemplate,
+      assetEntries,
+    };
+  } catch (error) {
+    emitPluginLog("warning", "No s'ha pogut reconstruir el mockup editable de Placeit.", {
+      structureJsonUrl: info.structureJsonUrl,
+      message: getErrorMessage(error),
+    });
+    return null;
+  }
 }
 
 function escapeXml(value) {
@@ -1358,50 +1986,279 @@ function detectEditableMockupPair(template, sourceToFilenameMap) {
   return bestPair;
 }
 
+function isLikelyPlaceholderAsset(sourceHref, layer) {
+  const source = String(sourceHref || "").trim().toLowerCase();
+  if (!source) {
+    return true;
+  }
+
+  if (
+    source.includes("/blank-") ||
+    source.includes("/blank.") ||
+    source.includes("placeholder") ||
+    source.includes("transparent")
+  ) {
+    return true;
+  }
+
+  if (source.startsWith("data:image/png;base64,ivborw0kggoaaaansuheugaaaaeaaaab")) {
+    return true;
+  }
+
+  const rect = layer?.rect || {};
+  const width = toFiniteNumber(rect.width, 0);
+  const height = toFiniteNumber(rect.height, 0);
+  if (width <= 2 || height <= 2) {
+    return true;
+  }
+
+  return false;
+}
+
+function resolveTemplateOffsets(template) {
+  const contentBounds = template?.canvas?.contentBounds || {};
+  const rawOffsetX = toFiniteNumber(contentBounds.x, 0);
+  const rawOffsetY = toFiniteNumber(contentBounds.y, 0);
+  return {
+    offsetX: rawOffsetX > 0 ? rawOffsetX : 0,
+    offsetY: rawOffsetY > 0 ? rawOffsetY : 0,
+  };
+}
+
+function resolveLayerWarpPlacement(layer, offsetX, offsetY) {
+  const rect = layer?.rect || {};
+  const layerX = toFiniteNumber(rect.x, 0) - offsetX;
+  const layerY = toFiniteNumber(rect.y, 0) - offsetY;
+  const layerW = Math.max(0, toFiniteNumber(rect.width, 0));
+  const layerH = Math.max(0, toFiniteNumber(rect.height, 0));
+  const layoutW = Math.max(0, toFiniteNumber(layer?.layoutWidth, layerW));
+  const layoutH = Math.max(0, toFiniteNumber(layer?.layoutHeight, layerH));
+
+  if (layerW <= 0 || layerH <= 0) {
+    return null;
+  }
+
+  const affine = parseAffineTransformFromCss(layer?.transform);
+  const rotationDeg = parseRotationDegreesFromTransform(layer?.transform);
+  const layoutRatioW = layerW > 0 ? layoutW / layerW : 1;
+  const layoutRatioH = layerH > 0 ? layoutH / layerH : 1;
+  const affineLooksReliable =
+    Number.isFinite(layoutRatioW) &&
+    Number.isFinite(layoutRatioH) &&
+    layoutRatioW >= MIN_SAFE_AFFINE_LAYOUT_RATIO &&
+    layoutRatioW <= MAX_SAFE_AFFINE_LAYOUT_RATIO &&
+    layoutRatioH >= MIN_SAFE_AFFINE_LAYOUT_RATIO &&
+    layoutRatioH <= MAX_SAFE_AFFINE_LAYOUT_RATIO;
+
+  let x = layerX;
+  let y = layerY;
+  let w = layerW;
+  let h = layerH;
+
+  if (Math.abs(rotationDeg) > 0.01 && !affine) {
+    const unrotated = getUnrotatedRectFromBoundingBox(
+      { x: layerX, y: layerY, width: layerW, height: layerH },
+      rotationDeg,
+    );
+    if (unrotated) {
+      x = unrotated.x;
+      y = unrotated.y;
+      w = unrotated.width;
+      h = unrotated.height;
+    }
+  }
+
+  const rotateTransformAttr =
+    Math.abs(rotationDeg) > 0.01 && !affine
+      ? ` transform="rotate(${rotationDeg} ${x + w / 2} ${y + h / 2})"`
+      : "";
+
+  let imageTransformAttr = "";
+  let imageX = x;
+  let imageY = y;
+  let imageW = w;
+  let imageH = h;
+  let affineMatrix = null;
+
+  if (affine && affineLooksReliable && layoutW > 0 && layoutH > 0) {
+    const perspectiveApprox = affine.perspective
+      ? approximateAffineFromPerspective(affine, layoutW, layoutH, layerX, layerY)
+      : null;
+
+    let matrixA = affine.a;
+    let matrixB = affine.b;
+    let matrixC = affine.c;
+    let matrixD = affine.d;
+    let tx;
+    let ty;
+
+    if (perspectiveApprox) {
+      matrixA = perspectiveApprox.a;
+      matrixB = perspectiveApprox.b;
+      matrixC = perspectiveApprox.c;
+      matrixD = perspectiveApprox.d;
+      tx = perspectiveApprox.e;
+      ty = perspectiveApprox.f;
+    } else {
+      const dxCandidates = [
+        0,
+        matrixA * layoutW,
+        matrixC * layoutH,
+        matrixA * layoutW + matrixC * layoutH,
+      ];
+      const dyCandidates = [
+        0,
+        matrixB * layoutW,
+        matrixD * layoutH,
+        matrixB * layoutW + matrixD * layoutH,
+      ];
+      const minDx = Math.min(...dxCandidates);
+      const minDy = Math.min(...dyCandidates);
+      tx = layerX - minDx;
+      ty = layerY - minDy;
+    }
+
+    imageX = 0;
+    imageY = 0;
+    imageW = layoutW;
+    imageH = layoutH;
+    imageTransformAttr = ` transform="matrix(${matrixA} ${matrixB} ${matrixC} ${matrixD} ${tx} ${ty})"`;
+    affineMatrix = {
+      a: matrixA,
+      b: matrixB,
+      c: matrixC,
+      d: matrixD,
+      e: tx,
+      f: ty,
+      perspective: Boolean(affine.perspective),
+      perspectiveApproximation: Boolean(perspectiveApprox),
+    };
+  }
+
+  return {
+    x,
+    y,
+    w,
+    h,
+    layoutW,
+    layoutH,
+    imageX,
+    imageY,
+    imageW,
+    imageH,
+    rotationDeg,
+    rotateTransformAttr,
+    imageTransformAttr,
+    affineMatrix,
+  };
+}
+
+function roundNumber(value, precision = 1000) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return 0;
+  }
+  return Math.round(parsed * precision) / precision;
+}
+
+function clampEditableScreenRadius(radius, width, height) {
+  const parsed = Number(radius);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return 0;
+  }
+
+  const minSide = Math.max(1, Math.min(width, height));
+  // Keep the screen clip close to real phone apertures and avoid over-rounding.
+  const maxRadius = minSide * 0.16;
+  return Math.max(0, Math.min(parsed, maxRadius));
+}
+
 function buildEditableMockupSvgText(template, sourceToFilenameMap, detectedPair) {
   if (!detectedPair) {
     return "";
   }
 
   const { width, height } = resolveTemplateCanvasSize(template);
-  const screen = detectedPair.screen;
-  const frame = detectedPair.frame;
-  const contentBounds = template?.canvas?.contentBounds || {};
-  const rawOffsetX = toFiniteNumber(contentBounds.x, 0);
-  const rawOffsetY = toFiniteNumber(contentBounds.y, 0);
-  const offsetX = rawOffsetX > 0 ? rawOffsetX : 0;
-  const offsetY = rawOffsetY > 0 ? rawOffsetY : 0;
-  const screenRect = {
-    ...screen.rect,
-    x: screen.rect.x - offsetX,
-    y: screen.rect.y - offsetY,
-  };
-  const frameRect = {
-    ...frame.rect,
-    x: frame.rect.x - offsetX,
-    y: frame.rect.y - offsetY,
-  };
+  const fallbackAsScreen =
+    isLikelyPlaceholderAsset(detectedPair.screen?.sourceHref, detectedPair.screen?.layer) &&
+    String(detectedPair.frame?.layer?.fallbackSource || "").toLowerCase() ===
+      "capturevisibletab";
+  const screen = fallbackAsScreen ? detectedPair.frame : detectedPair.screen;
+  const frame = fallbackAsScreen ? null : detectedPair.frame;
+  const { offsetX, offsetY } = resolveTemplateOffsets(template);
+  const screenPlacement = resolveLayerWarpPlacement(screen.layer, offsetX, offsetY);
+  const framePlacement = frame
+    ? resolveLayerWarpPlacement(frame.layer, offsetX, offsetY)
+    : null;
+
+  if (!screenPlacement || (frame && !framePlacement)) {
+    return "";
+  }
+
   const screenIdToken = buildSvgIdToken(screen.layer?.id || "screen", "screen");
-  const frameIdToken = buildSvgIdToken(frame.layer?.id || "frame", "frame");
+  const frameIdToken = frame
+    ? buildSvgIdToken(frame.layer?.id || "frame", "frame")
+    : "";
   const screenClipId = `${screenIdToken}_editable_clip`;
+  const screenMaskId = `${screenIdToken}_editable_mask`;
   const canvasClipId = "editable_canvas_clip";
-  const { rx, ry } = extractRadius(
+  const extractedRadius = extractRadius(
     screen.layer?.borderRadius,
-    screenRect.width,
-    screenRect.height,
+    screenPlacement.w,
+    screenPlacement.h,
     { allowLarge: true },
+  );
+  const rx = clampEditableScreenRadius(
+    extractedRadius.rx,
+    screenPlacement.w,
+    screenPlacement.h,
+  );
+  const ry = clampEditableScreenRadius(
+    extractedRadius.ry,
+    screenPlacement.w,
+    screenPlacement.h,
   );
   const radiusAttrs = rx > 0 || ry > 0 ? ` rx="${rx}" ry="${ry}"` : "";
   const screenLabel = escapeXml(
     buildLayerTreeLabel(screen.layer, screen.index ?? 0, "replaceable_screen"),
   );
-  const frameLabel = escapeXml(
-    buildLayerTreeLabel(frame.layer, frame.index ?? 0, "mockup_frame"),
-  );
+  const frameLabel = frame
+    ? escapeXml(buildLayerTreeLabel(frame.layer, frame.index ?? 0, "mockup_frame"))
+    : "";
   const screenPreserveAspectRatio = getImagePreserveAspectRatio(screen.layer?.objectFit);
-  const framePreserveAspectRatio = getImagePreserveAspectRatio(frame.layer?.objectFit);
+  const framePreserveAspectRatio = frame
+    ? getImagePreserveAspectRatio(frame.layer?.objectFit)
+    : "xMidYMid meet";
+  const screenOpacity = Math.max(0, Math.min(1, toFiniteNumber(screen.layer?.opacity, 1)));
+  const frameOpacity = frame
+    ? Math.max(0, Math.min(1, toFiniteNumber(frame.layer?.opacity, 1)))
+    : 1;
+  const screenOpacityAttr = screenOpacity < 1 ? ` opacity="${screenOpacity}"` : "";
+  const frameOpacityAttr = frameOpacity < 1 ? ` opacity="${frameOpacity}"` : "";
+
+  const rawScreenMaskHref = extractFirstUrlFromCssValue(screen.layer?.maskImage);
+  const screenMaskHref = resolveMappedSourceHref(rawScreenMaskHref, sourceToFilenameMap);
+  const maskPreserveAspectRatio = getMaskPreserveAspectRatio(screen.layer?.maskSize);
+  const screenMaskAttr = screenMaskHref ? ` mask="url(#${screenMaskId})"` : "";
   const title = escapeXml(template?.source?.title || "mockup editable");
   const sourceUrl = escapeXml(template?.source?.url || "");
+  const screenWarpMatrix = screenPlacement.affineMatrix
+    ? `${roundNumber(screenPlacement.affineMatrix.a, 1_000_000)},${roundNumber(screenPlacement.affineMatrix.b, 1_000_000)},${roundNumber(screenPlacement.affineMatrix.c, 1_000_000)},${roundNumber(screenPlacement.affineMatrix.d, 1_000_000)},${roundNumber(screenPlacement.affineMatrix.e, 1_000_000)},${roundNumber(screenPlacement.affineMatrix.f, 1_000_000)}`
+    : "";
+  const frameWarpMatrix = framePlacement?.affineMatrix
+    ? `${roundNumber(framePlacement.affineMatrix.a, 1_000_000)},${roundNumber(framePlacement.affineMatrix.b, 1_000_000)},${roundNumber(framePlacement.affineMatrix.c, 1_000_000)},${roundNumber(framePlacement.affineMatrix.d, 1_000_000)},${roundNumber(framePlacement.affineMatrix.e, 1_000_000)},${roundNumber(framePlacement.affineMatrix.f, 1_000_000)}`
+    : "";
+  const defs = [
+    `<clipPath id="${canvasClipId}"><rect x="0" y="0" width="${width}" height="${height}" /></clipPath>`,
+    `<clipPath id="${screenClipId}"><rect x="${screenPlacement.x}" y="${screenPlacement.y}" width="${screenPlacement.w}" height="${screenPlacement.h}"${radiusAttrs} /></clipPath>`,
+  ];
+
+  if (screenMaskHref) {
+    const screenMaskLumaFilter = buildMaskLumaSafeFilter(defs, `${screenIdToken}_editable`);
+    defs.push(
+      `<mask id="${screenMaskId}" maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse" x="${screenPlacement.x}" y="${screenPlacement.y}" width="${screenPlacement.w}" height="${screenPlacement.h}" style="mask-type: alpha;"><image x="${screenPlacement.x}" y="${screenPlacement.y}" width="${screenPlacement.w}" height="${screenPlacement.h}" preserveAspectRatio="${maskPreserveAspectRatio}" ${buildHrefAttributes(screenMaskHref)} filter="${screenMaskLumaFilter}" /></mask>`,
+    );
+  }
 
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
@@ -1411,20 +2268,23 @@ function buildEditableMockupSvgText(template, sourceToFilenameMap, detectedPair)
     `<dc:source xmlns:dc="http://purl.org/dc/elements/1.1/">${sourceUrl}</dc:source>`,
     '<dc:description xmlns:dc="http://purl.org/dc/elements/1.1/">Edita la capa replaceable_screen per substituir la captura interna del mockup.</dc:description>',
     "</metadata>",
-    "<defs>",
-    `<clipPath id="${canvasClipId}"><rect x="0" y="0" width="${width}" height="${height}" /></clipPath>`,
-    `<clipPath id="${screenClipId}"><rect x="${screenRect.x}" y="${screenRect.y}" width="${screenRect.width}" height="${screenRect.height}"${radiusAttrs} /></clipPath>`,
-    "</defs>",
+    `<defs>${defs.join("")}</defs>`,
     `<g clip-path="url(#${canvasClipId})">`,
-    `<g id="replaceable_screen" inkscape:label="replaceable_screen" data-replaceable="true" data-layer-id="${escapeXml(String(screen.layer?.id || ""))}" data-layer-selector="${screenLabel}">`,
-    `<image id="${screenIdToken}_image" x="${screenRect.x}" y="${screenRect.y}" width="${screenRect.width}" height="${screenRect.height}" preserveAspectRatio="${screenPreserveAspectRatio}" clip-path="url(#${screenClipId})" ${buildHrefAttributes(screen.sourceHref)} />`,
+    `<g id="replaceable_screen" inkscape:label="replaceable_screen" data-replaceable="true" data-layer-id="${escapeXml(String(screen.layer?.id || ""))}" data-layer-selector="${screenLabel}" data-warp-matrix="${escapeXml(screenWarpMatrix)}" data-rotation-deg="${roundNumber(screenPlacement.rotationDeg, 1000)}"${screenOpacityAttr}${screenPlacement.rotateTransformAttr}>`,
+    `<image id="${screenIdToken}_image" x="${screenPlacement.imageX}" y="${screenPlacement.imageY}" width="${screenPlacement.imageW}" height="${screenPlacement.imageH}" preserveAspectRatio="${screenPreserveAspectRatio}" clip-path="url(#${screenClipId})"${screenMaskAttr}${screenPlacement.imageTransformAttr} ${buildHrefAttributes(screen.sourceHref)} />`,
     "</g>",
-    `<g id="mockup_frame" inkscape:label="mockup_frame" data-layer-id="${escapeXml(String(frame.layer?.id || ""))}" data-layer-selector="${frameLabel}">`,
-    `<image id="${frameIdToken}_image" x="${frameRect.x}" y="${frameRect.y}" width="${frameRect.width}" height="${frameRect.height}" preserveAspectRatio="${framePreserveAspectRatio}" ${buildHrefAttributes(frame.sourceHref)} />`,
-    "</g>",
+    frame
+      ? `<g id="mockup_frame" inkscape:label="mockup_frame" data-layer-id="${escapeXml(String(frame.layer?.id || ""))}" data-layer-selector="${frameLabel}" data-warp-matrix="${escapeXml(frameWarpMatrix)}" data-rotation-deg="${roundNumber(framePlacement.rotationDeg, 1000)}"${frameOpacityAttr}${framePlacement.rotateTransformAttr}>`
+      : "",
+    frame
+      ? `<image id="${frameIdToken}_image" x="${framePlacement.imageX}" y="${framePlacement.imageY}" width="${framePlacement.imageW}" height="${framePlacement.imageH}" preserveAspectRatio="${framePreserveAspectRatio}"${framePlacement.imageTransformAttr} ${buildHrefAttributes(frame.sourceHref)} />`
+      : "",
+    frame ? "</g>" : "",
     "</g>",
     "</svg>",
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function buildTemplateSvgText(
@@ -1791,7 +2651,190 @@ function buildTemplateSvgText(
     .join("\n");
 }
 
-function buildTemplateArchiveEntries(
+function buildEditableMockupSimpleSvgText(template, sourceToFilenameMap, detectedPair) {
+  if (!detectedPair) {
+    return "";
+  }
+
+  const { width, height } = resolveTemplateCanvasSize(template);
+  const fallbackAsScreen =
+    isLikelyPlaceholderAsset(detectedPair.screen?.sourceHref, detectedPair.screen?.layer) &&
+    String(detectedPair.frame?.layer?.fallbackSource || "").toLowerCase() ===
+      "capturevisibletab";
+  const screen = fallbackAsScreen ? detectedPair.frame : detectedPair.screen;
+  const frame = fallbackAsScreen ? null : detectedPair.frame;
+  const { offsetX, offsetY } = resolveTemplateOffsets(template);
+  const screenRect = {
+    ...screen.rect,
+    x: screen.rect.x - offsetX,
+    y: screen.rect.y - offsetY,
+  };
+  const frameRect = frame
+    ? {
+        ...frame.rect,
+        x: frame.rect.x - offsetX,
+        y: frame.rect.y - offsetY,
+      }
+    : null;
+  const screenIdToken = buildSvgIdToken(screen.layer?.id || "screen", "screen");
+  const frameIdToken = frame
+    ? buildSvgIdToken(frame.layer?.id || "frame", "frame")
+    : "";
+  const screenClipId = `${screenIdToken}_simple_clip`;
+  const canvasClipId = "editable_simple_canvas_clip";
+  const extractedRadius = extractRadius(
+    screen.layer?.borderRadius,
+    screenRect.width,
+    screenRect.height,
+    { allowLarge: true },
+  );
+  const rx = clampEditableScreenRadius(
+    extractedRadius.rx,
+    screenRect.width,
+    screenRect.height,
+  );
+  const ry = clampEditableScreenRadius(
+    extractedRadius.ry,
+    screenRect.width,
+    screenRect.height,
+  );
+  const radiusAttrs = rx > 0 || ry > 0 ? ` rx="${rx}" ry="${ry}"` : "";
+  const screenLabel = escapeXml(
+    buildLayerTreeLabel(screen.layer, screen.index ?? 0, "replaceable_screen"),
+  );
+  const frameLabel = frame
+    ? escapeXml(buildLayerTreeLabel(frame.layer, frame.index ?? 0, "mockup_frame"))
+    : "";
+  const screenPreserveAspectRatio = getImagePreserveAspectRatio(screen.layer?.objectFit);
+  const framePreserveAspectRatio = frame
+    ? getImagePreserveAspectRatio(frame.layer?.objectFit)
+    : "xMidYMid meet";
+  const title = escapeXml(template?.source?.title || "mockup editable simple");
+  const sourceUrl = escapeXml(template?.source?.url || "");
+
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
+    "<metadata>",
+    `<dc:title xmlns:dc="http://purl.org/dc/elements/1.1/">${title}</dc:title>`,
+    `<dc:source xmlns:dc="http://purl.org/dc/elements/1.1/">${sourceUrl}</dc:source>`,
+    '<dc:description xmlns:dc="http://purl.org/dc/elements/1.1/">Versio simple: reemplaça la pantalla sense warp matrix.</dc:description>',
+    "</metadata>",
+    "<defs>",
+    `<clipPath id="${canvasClipId}"><rect x="0" y="0" width="${width}" height="${height}" /></clipPath>`,
+    `<clipPath id="${screenClipId}"><rect x="${screenRect.x}" y="${screenRect.y}" width="${screenRect.width}" height="${screenRect.height}"${radiusAttrs} /></clipPath>`,
+    "</defs>",
+    `<g clip-path="url(#${canvasClipId})">`,
+    `<g id="replaceable_screen" inkscape:label="replaceable_screen" data-replaceable="true" data-layer-id="${escapeXml(String(screen.layer?.id || ""))}" data-layer-selector="${screenLabel}">`,
+    `<image id="${screenIdToken}_image" x="${screenRect.x}" y="${screenRect.y}" width="${screenRect.width}" height="${screenRect.height}" preserveAspectRatio="${screenPreserveAspectRatio}" clip-path="url(#${screenClipId})" ${buildHrefAttributes(screen.sourceHref)} />`,
+    "</g>",
+    frame
+      ? `<g id="mockup_frame" inkscape:label="mockup_frame" data-layer-id="${escapeXml(String(frame.layer?.id || ""))}" data-layer-selector="${frameLabel}">`
+      : "",
+    frame
+      ? `<image id="${frameIdToken}_image" x="${frameRect.x}" y="${frameRect.y}" width="${frameRect.width}" height="${frameRect.height}" preserveAspectRatio="${framePreserveAspectRatio}" ${buildHrefAttributes(frame.sourceHref)} />`
+      : "",
+    frame ? "</g>" : "",
+    "</g>",
+    "</svg>",
+  ].join("\n");
+}
+
+function buildWarpMetadata(layer, placement) {
+  if (!layer || !placement) {
+    return null;
+  }
+
+  const metadata = {
+    transform: String(layer?.transform || "none"),
+    transformOrigin: String(layer?.transformOrigin || ""),
+    layoutWidth: roundNumber(placement.layoutW, 1000),
+    layoutHeight: roundNumber(placement.layoutH, 1000),
+    rotationDeg: roundNumber(placement.rotationDeg, 1000),
+  };
+
+  if (placement.affineMatrix) {
+    metadata.matrix = {
+      a: roundNumber(placement.affineMatrix.a, 1_000_000),
+      b: roundNumber(placement.affineMatrix.b, 1_000_000),
+      c: roundNumber(placement.affineMatrix.c, 1_000_000),
+      d: roundNumber(placement.affineMatrix.d, 1_000_000),
+      e: roundNumber(placement.affineMatrix.e, 1_000_000),
+      f: roundNumber(placement.affineMatrix.f, 1_000_000),
+      perspective: Boolean(placement.affineMatrix.perspective),
+      perspectiveApproximation: Boolean(
+        placement.affineMatrix.perspectiveApproximation,
+      ),
+    };
+  }
+
+  return metadata;
+}
+
+function buildEditableScreenMaskEntry(template, sourceToFilenameMap, detectedPair) {
+  if (!detectedPair) {
+    return null;
+  }
+
+  const { width, height } = resolveTemplateCanvasSize(template);
+  const { offsetX, offsetY } = resolveTemplateOffsets(template);
+  const screenLayer = detectedPair.screen?.layer;
+  const placement = resolveLayerWarpPlacement(screenLayer, offsetX, offsetY);
+
+  if (!screenLayer || !placement) {
+    return null;
+  }
+
+  const rawMaskHref = extractFirstUrlFromCssValue(screenLayer?.maskImage);
+  const mappedMaskHref = resolveMappedSourceHref(rawMaskHref, sourceToFilenameMap);
+  const maskHref = mappedMaskHref || rawMaskHref || "";
+  const maskPreserveAspectRatio = getMaskPreserveAspectRatio(screenLayer?.maskSize);
+  const extractedRadius = extractRadius(screenLayer?.borderRadius, placement.w, placement.h, {
+    allowLarge: true,
+  });
+  const rx = clampEditableScreenRadius(extractedRadius.rx, placement.w, placement.h);
+  const ry = clampEditableScreenRadius(extractedRadius.ry, placement.w, placement.h);
+  const radiusAttrs = rx > 0 || ry > 0 ? ` rx="${rx}" ry="${ry}"` : "";
+  const clipId = "screen_mask_clip";
+  const canvasClipId = "screen_mask_canvas_clip";
+  const opacity = Math.max(0, Math.min(1, toFiniteNumber(screenLayer?.opacity, 1)));
+  const opacityAttr = opacity < 1 ? ` opacity="${opacity}"` : "";
+  const defs = [
+    `<clipPath id="${canvasClipId}"><rect x="0" y="0" width="${width}" height="${height}" /></clipPath>`,
+    `<clipPath id="${clipId}"><rect x="${placement.x}" y="${placement.y}" width="${placement.w}" height="${placement.h}"${radiusAttrs} /></clipPath>`,
+  ];
+  const nodes = [];
+
+  if (maskHref) {
+    const whiteFilter = buildAlphaTintFilter("#ffffff", defs, "screen_mask");
+    const filterAttr = whiteFilter ? ` filter="${whiteFilter}"` : "";
+    nodes.push(
+      `<image x="${placement.imageX}" y="${placement.imageY}" width="${placement.imageW}" height="${placement.imageH}" preserveAspectRatio="${maskPreserveAspectRatio}" clip-path="url(#${clipId})"${placement.imageTransformAttr}${filterAttr} ${buildHrefAttributes(maskHref)} />`,
+    );
+  } else {
+    nodes.push(
+      `<rect x="${placement.x}" y="${placement.y}" width="${placement.w}" height="${placement.h}"${radiusAttrs} fill="#ffffff" />`,
+    );
+  }
+
+  const svgText = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
+    `<defs>${defs.join("")}</defs>`,
+    `<g id="replaceable_screen_mask" clip-path="url(#${canvasClipId})"${opacityAttr}${placement.rotateTransformAttr}>`,
+    ...nodes,
+    "</g>",
+    "</svg>",
+  ].join("\n");
+
+  const encoder = new TextEncoder();
+  return {
+    name: "mockup_screen_mask.svg",
+    bytes: new Uint8Array(encoder.encode(svgText)),
+  };
+}
+
+async function buildTemplateArchiveEntries(
   template,
   sourceToFilenameMap,
   sourceToSvgTextMap = new Map(),
@@ -1802,29 +2845,87 @@ function buildTemplateArchiveEntries(
   }
 
   const encoder = new TextEncoder();
-  const detectedPair = detectEditableMockupPair(
+  const placeitArchive = await buildPlaceitV4ArchiveData(
     normalizedTemplate,
     sourceToFilenameMap,
+    sourceToSvgTextMap,
   );
-  const editableSvg = buildEditableMockupSvgText(
-    normalizedTemplate,
-    sourceToFilenameMap,
-    detectedPair,
-  );
-  let templateForArchive = normalizedTemplate;
+  const workingTemplate = placeitArchive?.derivedTemplate || normalizedTemplate;
+  const detectedPair = placeitArchive
+    ? null
+    : detectEditableMockupPair(workingTemplate, sourceToFilenameMap);
+  const { offsetX, offsetY } = resolveTemplateOffsets(workingTemplate);
+  const screenPlacement = detectedPair
+    ? resolveLayerWarpPlacement(detectedPair.screen?.layer, offsetX, offsetY)
+    : null;
+  const framePlacement = detectedPair
+    ? resolveLayerWarpPlacement(detectedPair.frame?.layer, offsetX, offsetY)
+    : null;
+  const defaultEditableSvg = detectedPair
+    ? buildEditableMockupSvgText(workingTemplate, sourceToFilenameMap, detectedPair)
+    : "";
+  const defaultEditableSimpleSvg = detectedPair
+    ? buildEditableMockupSimpleSvgText(workingTemplate, sourceToFilenameMap, detectedPair)
+    : "";
+  const editableScreenMaskEntry = detectedPair
+    ? buildEditableScreenMaskEntry(workingTemplate, sourceToFilenameMap, detectedPair)
+    : null;
+  let templateForArchive = workingTemplate;
+  let editableSvg = defaultEditableSvg;
+  let editableSimpleSvg = defaultEditableSimpleSvg;
 
-  if (detectedPair) {
-    const screenRadius = extractRadius(
+  if (placeitArchive) {
+    const screenLayer =
+      workingTemplate.layers.find((layer) => layer?.role === "replaceable_screen") || null;
+    templateForArchive = {
+      ...workingTemplate,
+      editableMockup: {
+        detected: Boolean(screenLayer),
+        strategy: "placeit_v4_structure",
+        svgFilename: "mockup_editable.svg",
+        simpleSvgFilename: "mockup_editable_simple.svg",
+        screenLayerId: screenLayer?.id || "",
+        screenSelector: screenLayer?.selector || "",
+        screenRect: screenLayer?.rect || {},
+        reason: screenLayer
+          ? ""
+          : "No s'ha trobat cap capa replaceable_screen al structure.json.",
+      },
+    };
+    editableSvg = buildTemplateSvgText(
+      workingTemplate,
+      sourceToFilenameMap,
+      sourceToSvgTextMap,
+    );
+    editableSimpleSvg = editableSvg;
+  } else if (detectedPair) {
+    const screenMaskSource = extractFirstUrlFromCssValue(
+      detectedPair.screen.layer?.maskImage,
+    );
+    const extractedScreenRadius = extractRadius(
       detectedPair.screen.layer?.borderRadius,
       detectedPair.screen.rect.width,
       detectedPair.screen.rect.height,
       { allowLarge: true },
     );
+    const screenRadius = {
+      rx: clampEditableScreenRadius(
+        extractedScreenRadius.rx,
+        detectedPair.screen.rect.width,
+        detectedPair.screen.rect.height,
+      ),
+      ry: clampEditableScreenRadius(
+        extractedScreenRadius.ry,
+        detectedPair.screen.rect.width,
+        detectedPair.screen.rect.height,
+      ),
+    };
     templateForArchive = {
-      ...normalizedTemplate,
+      ...workingTemplate,
       editableMockup: {
         detected: true,
         svgFilename: "mockup_editable.svg",
+        simpleSvgFilename: "mockup_editable_simple.svg",
         screenLayerId: detectedPair.screen.layer?.id || "",
         frameLayerId: detectedPair.frame.layer?.id || "",
         screenSelector: detectedPair.screen.layer?.selector || "",
@@ -1845,16 +2946,21 @@ function buildTemplateArchiveEntries(
           rx: Math.round(screenRadius.rx * 100) / 100,
           ry: Math.round(screenRadius.ry * 100) / 100,
         },
+        screenWarp: buildWarpMetadata(detectedPair.screen.layer, screenPlacement),
+        frameWarp: buildWarpMetadata(detectedPair.frame.layer, framePlacement),
         screenAsset: detectedPair.screen.sourceHref,
         frameAsset: detectedPair.frame.sourceHref,
+        screenMaskSource,
+        screenMaskFilename: editableScreenMaskEntry ? editableScreenMaskEntry.name : "",
       },
     };
   } else {
     templateForArchive = {
-      ...normalizedTemplate,
+      ...workingTemplate,
       editableMockup: {
         detected: false,
         svgFilename: "mockup_editable.svg",
+        simpleSvgFilename: "mockup_editable_simple.svg",
         reason:
           "No s'ha pogut detectar automaticament una parella screen/frame compatible.",
       },
@@ -1863,18 +2969,19 @@ function buildTemplateArchiveEntries(
 
   const templateJson = JSON.stringify(templateForArchive, null, 2);
   const templateSvg = buildTemplateSvgText(
-    normalizedTemplate,
+    workingTemplate,
     sourceToFilenameMap,
     sourceToSvgTextMap,
   );
-  const backgroundLayerEntry = buildBackgroundLayerEntry(normalizedTemplate);
+  const backgroundLayerEntry = buildBackgroundLayerEntry(workingTemplate);
   const duplicateMaskLayerEntries = buildDuplicateMaskLayerEntries(
-    normalizedTemplate,
+    workingTemplate,
     sourceToFilenameMap,
     sourceToSvgTextMap,
   );
 
   const entries = [
+    ...(placeitArchive?.assetEntries || []),
     {
       name: "plantilla_mockup.json",
       bytes: new Uint8Array(encoder.encode(templateJson)),
@@ -1883,6 +2990,7 @@ function buildTemplateArchiveEntries(
       name: "plantilla_mockup.svg",
       bytes: new Uint8Array(encoder.encode(templateSvg)),
     },
+    ...(editableScreenMaskEntry ? [editableScreenMaskEntry] : []),
     ...(backgroundLayerEntry ? [backgroundLayerEntry] : []),
     ...duplicateMaskLayerEntries,
   ];
@@ -1894,11 +3002,22 @@ function buildTemplateArchiveEntries(
     });
   }
 
+  if (editableSimpleSvg) {
+    entries.push({
+      name: "mockup_editable_simple.svg",
+      bytes: new Uint8Array(encoder.encode(editableSimpleSvg)),
+    });
+  }
+
   return entries;
 }
 
 function buildTemplateEntryFilename(originalName, index) {
-  const baseName = sanitizeArchiveSegment(String(originalName || "").replace(/\.[^.]+$/, ""));
+  const rawBaseName = String(originalName || "").replace(/\.[^.]+$/, "");
+  const normalizedBaseName = sanitizeArchiveSegment(rawBaseName);
+  const baseName = normalizedBaseName
+    ? normalizedBaseName.slice(0, 72)
+    : `captura_${String(index + 1).padStart(2, "0")}`;
   return `${String(index + 1).padStart(2, "0")}_${baseName}.png`;
 }
 
@@ -2029,11 +3148,11 @@ export async function downloadImages(urls, options = {}) {
       }
 
       entries.push(
-        ...buildTemplateArchiveEntries(
+        ...(await buildTemplateArchiveEntries(
           archiveTemplate,
           sourceToFilenameMap,
           sourceToSvgTextMap,
-        ),
+        )),
       );
       entries.push(...archiveExtraEntries);
 

@@ -146,6 +146,83 @@ body:not([data-mode="window"]) h1 {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
 }
 
+.segment-control {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 0 0 14px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(10, 18, 38, 0.52);
+}
+
+.segment-control__button {
+  min-height: 34px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.segment-control__button[aria-pressed="true"] {
+  border-color: rgba(34, 211, 197, 0.56);
+  background: rgba(14, 64, 74, 0.68);
+  color: #c7fbf6;
+  box-shadow: inset 0 0 0 1px rgba(122, 244, 233, 0.18);
+}
+
+.mode-panel {
+  border: 1px solid var(--border);
+  border-radius: 22px;
+  background: linear-gradient(180deg, rgba(11, 20, 38, 0.82), rgba(8, 15, 30, 0.92));
+  box-shadow: var(--shadow-md);
+  backdrop-filter: blur(16px);
+  padding: 16px;
+}
+
+.mode-panel__description {
+  margin: 6px 0 14px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.mode-panel__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.mode-panel__groups {
+  display: grid;
+  gap: 12px;
+}
+
+.mode-panel__group {
+  padding: 12px;
+  border: 1px solid rgba(118, 146, 196, 0.2);
+  border-radius: 14px;
+  background: rgba(8, 16, 31, 0.66);
+}
+
+.mode-panel__group-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.mode-panel__group-hint {
+  margin: 4px 0 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .control-panel,
 .results-panel {
   border: 1px solid var(--border);
@@ -843,6 +920,24 @@ body[data-mode="window"] .image-list {
   box-shadow:
     inset 0 0 0 1px rgba(122, 244, 233, 0.2),
     0 0 0 3px rgba(34, 211, 197, 0.12);
+}
+
+.secondary-button--done {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-color: rgba(34, 211, 197, 0.62);
+  background: linear-gradient(180deg, rgba(10, 58, 49, 0.94), rgba(7, 40, 35, 0.94));
+  color: #c6fff2;
+  box-shadow: inset 0 0 0 1px rgba(122, 244, 233, 0.18);
+}
+
+.secondary-button--done::after {
+  content: "✓";
+  color: #52f39d;
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1;
 }
 
 .icon-button {

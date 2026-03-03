@@ -454,6 +454,20 @@ async function cropCapturedArea(dataUrl, selection) {
   return canvas.convertToBlob({ type: "image/png" });
 }
 
+async function blobToDataUrl(blob) {
+  const arrayBuffer = await blob.arrayBuffer();
+  const bytes = new Uint8Array(arrayBuffer);
+  let binary = "";
+  const chunkSize = 0x8000;
+
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    const chunk = bytes.subarray(index, index + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+
+  return `data:${blob.type || "application/octet-stream"};base64,${btoa(binary)}`;
+}
+
 function removeHoverShield() {
   window.__imageDownloaderHoverShield?.remove();
   delete window.__imageDownloaderHoverShield;
@@ -1071,6 +1085,17 @@ export async function captureVisibleTabAndDownload(windowId, options = {}) {
     upscale: options.upscale,
     windowId,
   });
+}
+
+export async function captureVisibleTabSnapshot(windowId, selection = null) {
+  const fullCapture = await captureVisibleTabRateLimited(windowId);
+
+  if (!selection) {
+    return fullCapture;
+  }
+
+  const croppedBlob = await cropCapturedArea(fullCapture, selection);
+  return blobToDataUrl(croppedBlob);
 }
 
 export function notifyElementCaptureCancelled(tabId, windowId) {

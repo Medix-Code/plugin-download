@@ -1,5 +1,12 @@
 export const elements = {
   statusMessage: document.getElementById("statusMessage"),
+  segmentGeneralButton: document.getElementById("segmentGeneralButton"),
+  segmentMockupButton: document.getElementById("segmentMockupButton"),
+  segmentGeneralView: document.getElementById("segmentGeneralView"),
+  segmentMockupView: document.getElementById("segmentMockupView"),
+  mockupQuickAnalyzeButton: document.getElementById("mockupQuickAnalyzeButton"),
+  mockupQuickCaptureButton: document.getElementById("mockupQuickCaptureButton"),
+  mockupQuickZipButton: document.getElementById("mockupQuickZipButton"),
   sourceSite: document.getElementById("sourceSite"),
   sourceSiteValue: document.getElementById("sourceSiteValue"),
   imageList: document.getElementById("imageList"),

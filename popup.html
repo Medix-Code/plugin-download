@@ -49,138 +49,184 @@
 
       <p id="statusMessage" class="status">Escanejant la pestanya actual...</p>
 
-      <section class="control-panel" aria-label="Controls principals">
-        <div class="toolbar">
-          <button id="selectAllButton" class="secondary-button" type="button">Seleccionar totes</button>
-          <button id="clearButton" class="secondary-button" type="button">Treure seleccio</button>
-        </div>
+      <section class="segment-control" aria-label="Mode de treball">
+        <button
+          id="segmentGeneralButton"
+          class="segment-control__button"
+          type="button"
+          aria-pressed="true"
+        >
+          General
+        </button>
+        <button
+          id="segmentMockupButton"
+          class="segment-control__button"
+          type="button"
+          aria-pressed="false"
+        >
+          Mockup
+        </button>
+      </section>
 
-        <div class="filter-grid">
-          <div class="filter-group">
-            <p class="filter-label">Origen</p>
-            <section id="scopeFilterBar" class="filter-bar" aria-label="Filtre per origen"></section>
+      <div id="segmentGeneralView">
+        <section class="control-panel" aria-label="Controls principals">
+          <div class="toolbar">
+            <button id="selectAllButton" class="secondary-button" type="button">Seleccionar totes</button>
+            <button id="clearButton" class="secondary-button" type="button">Treure seleccio</button>
           </div>
 
-          <div class="filter-group">
-            <p class="filter-label">Tipus</p>
-            <section id="typeFilterBar" class="filter-bar" aria-label="Filtre per tipus"></section>
+          <div class="filter-grid">
+            <div class="filter-group">
+              <p class="filter-label">Origen</p>
+              <section id="scopeFilterBar" class="filter-bar" aria-label="Filtre per origen"></section>
+            </div>
+
+            <div class="filter-group">
+              <p class="filter-label">Tipus</p>
+              <section id="typeFilterBar" class="filter-bar" aria-label="Filtre per tipus"></section>
+            </div>
+
+            <div class="filter-group">
+              <p class="filter-label">Tamany</p>
+              <section id="sizeFilterBar" class="filter-bar" aria-label="Filtre per tamany"></section>
+            </div>
           </div>
 
-          <div class="filter-group">
-            <p class="filter-label">Tamany</p>
-            <section id="sizeFilterBar" class="filter-bar" aria-label="Filtre per tamany"></section>
-          </div>
-        </div>
+          <p class="hint">
+            Els gradients CSS no tenen fitxer propi. Usa <strong>Captura visual (PNG)</strong> segons el que vulguis provar.
+          </p>
 
-        <p class="hint">
-          Els gradients CSS no tenen fitxer propi. Usa <strong>Captura bloc</strong> segons el que vulguis provar.
+          <section class="analysis-toolbar" aria-label="Analisi de bloc">
+            <input id="hideFixedStickyCheckbox" type="checkbox" checked hidden />
+            <div class="analysis-actions">
+              <button
+                id="analyzeElementButton"
+                class="secondary-button"
+                type="button"
+                aria-pressed="false"
+                title="Analitza colors, tipografia i estils del bloc que cliquis"
+              >
+                Analitza bloc (JSON)
+              </button>
+            </div>
+          </section>
+
+          <section id="analysisPanel" class="analysis-panel" aria-label="Resultat d'analisi de bloc" hidden>
+            <div class="analysis-panel__header">
+              <p class="filter-label">Analisi del bloc</p>
+              <button
+                id="clearAnalysisButton"
+                class="secondary-button secondary-button--small"
+                type="button"
+                disabled
+              >
+                Netejar
+              </button>
+            </div>
+            <p id="analysisSummary" class="analysis-summary"></p>
+            <div class="analysis-content">
+              <textarea
+                id="analysisOutput"
+                class="analysis-output"
+                spellcheck="false"
+                aria-label="JSON de l'analisi del bloc"
+              ></textarea>
+              <aside id="analysisPreviewPanel" class="analysis-preview-panel" hidden>
+                <p class="analysis-preview-label">Preview SVG</p>
+                <img id="analysisSvgPreview" class="analysis-preview-image" alt="Preview SVG del bloc analitzat" />
+                <div id="analysisAssetGallery" class="analysis-asset-gallery" hidden>
+                  <p class="analysis-preview-label">Imatges detectades</p>
+                  <div id="analysisAssetList" class="analysis-asset-list"></div>
+                </div>
+              </aside>
+            </div>
+            <div class="analysis-buttons">
+              <button id="copyAnalysisButton" class="secondary-button secondary-button--small" type="button" disabled>
+                Copiar JSON
+              </button>
+              <button id="saveAnalysisButton" class="secondary-button secondary-button--small" type="button" disabled>
+                Guardar JSON
+              </button>
+              <button
+                id="downloadBlockBundleButton"
+                class="secondary-button secondary-button--small"
+                type="button"
+                disabled
+              >
+                Exporta analitzat (ZIP)
+              </button>
+            </div>
+          </section>
+        </section>
+
+        <section class="results-panel">
+          <section id="imageList" class="image-list" aria-live="polite"></section>
+          <div id="paginationPanel" class="pagination-panel" hidden>
+            <button id="paginationPrevButton" class="secondary-button secondary-button--small" type="button">
+              Anterior
+            </button>
+            <p id="paginationInfo" class="pagination-info"></p>
+            <button id="paginationNextButton" class="secondary-button secondary-button--small" type="button">
+              Seguent
+            </button>
+          </div>
+        </section>
+
+        <section class="logs-panel" aria-label="Logs del plugin">
+          <div class="logs-panel__header">
+            <p class="filter-label">Logs</p>
+            <button id="clearLogsButton" class="secondary-button secondary-button--small" type="button">
+              Netejar logs
+            </button>
+          </div>
+          <div id="logList" class="log-list" aria-live="polite"></div>
+        </section>
+
+        <footer class="footer">
+          <div class="footer-summary">
+            <span id="selectionCount" class="selection-count">0 seleccionades</span>
+            <span id="downloadLocationNote" class="footer-note">Descarregues i captures a Downloads/Image Picker/.</span>
+          </div>
+          <div class="footer-actions">
+            <div class="action-group" aria-label="Captures">
+              <button
+                id="captureElementButton"
+                class="secondary-button"
+                type="button"
+                title="Fa captura visual PNG de l'element o card que cliquis"
+              >
+                Captura visual (PNG)
+              </button>
+            </div>
+            <button id="downloadButton" class="primary-button" type="button" disabled>Descarregar</button>
+          </div>
+        </footer>
+      </div>
+
+      <section id="segmentMockupView" class="mode-panel mode-panel--mockup" aria-label="Eines mockup" hidden>
+        <p class="filter-label">Mockup Studio</p>
+        <p class="mode-panel__description">
+          Separa clarament els fluxos: <strong>Bloc analitzat</strong> (JSON + ZIP) i <strong>Captura visual</strong> (PNG).
         </p>
+        <div class="mode-panel__groups">
+          <section class="mode-panel__group" aria-label="Flux bloc analitzat">
+            <p class="mode-panel__group-title">Bloc analitzat</p>
+            <p class="mode-panel__group-hint">1) Analitza el bloc, 2) exporta el que s'ha analitzat.</p>
+            <div class="mode-panel__actions">
+              <button id="mockupQuickAnalyzeButton" class="secondary-button" type="button" aria-pressed="false">1. Analitza bloc (JSON)</button>
+              <button id="mockupQuickZipButton" class="primary-button" type="button" disabled>2. Exporta analitzat (ZIP)</button>
+            </div>
+          </section>
 
-        <section class="analysis-toolbar" aria-label="Analisi de bloc">
-          <input id="hideFixedStickyCheckbox" type="checkbox" checked hidden />
-          <div class="analysis-actions">
-            <button
-              id="analyzeElementButton"
-              class="secondary-button"
-              type="button"
-              aria-pressed="false"
-              title="Analitza colors, tipografia i estils del bloc que cliquis"
-            >
-              Analitza bloc
-            </button>
-          </div>
-        </section>
-
-        <section id="analysisPanel" class="analysis-panel" aria-label="Resultat d'analisi de bloc" hidden>
-          <div class="analysis-panel__header">
-            <p class="filter-label">Analisi del bloc</p>
-            <button
-              id="clearAnalysisButton"
-              class="secondary-button secondary-button--small"
-              type="button"
-              disabled
-            >
-              Netejar
-            </button>
-          </div>
-          <p id="analysisSummary" class="analysis-summary"></p>
-          <div class="analysis-content">
-            <textarea
-              id="analysisOutput"
-              class="analysis-output"
-              spellcheck="false"
-              aria-label="JSON de l'analisi del bloc"
-            ></textarea>
-            <aside id="analysisPreviewPanel" class="analysis-preview-panel" hidden>
-              <p class="analysis-preview-label">Preview SVG</p>
-              <img id="analysisSvgPreview" class="analysis-preview-image" alt="Preview SVG del bloc analitzat" />
-              <div id="analysisAssetGallery" class="analysis-asset-gallery" hidden>
-                <p class="analysis-preview-label">Imatges detectades</p>
-                <div id="analysisAssetList" class="analysis-asset-list"></div>
-              </div>
-            </aside>
-          </div>
-          <div class="analysis-buttons">
-            <button id="copyAnalysisButton" class="secondary-button secondary-button--small" type="button" disabled>
-              Copiar JSON
-            </button>
-            <button id="saveAnalysisButton" class="secondary-button secondary-button--small" type="button" disabled>
-              Guardar JSON
-            </button>
-            <button
-              id="downloadBlockBundleButton"
-              class="secondary-button secondary-button--small"
-              type="button"
-              disabled
-            >
-              Descarrega bloc ZIP
-            </button>
-          </div>
-        </section>
-      </section>
-
-      <section class="results-panel">
-        <section id="imageList" class="image-list" aria-live="polite"></section>
-        <div id="paginationPanel" class="pagination-panel" hidden>
-          <button id="paginationPrevButton" class="secondary-button secondary-button--small" type="button">
-            Anterior
-          </button>
-          <p id="paginationInfo" class="pagination-info"></p>
-          <button id="paginationNextButton" class="secondary-button secondary-button--small" type="button">
-            Seguent
-          </button>
+          <section class="mode-panel__group" aria-label="Flux captura visual">
+            <p class="mode-panel__group-title">Captura visual</p>
+            <p class="mode-panel__group-hint">Fa una foto PNG directa del bloc seleccionat.</p>
+            <div class="mode-panel__actions">
+              <button id="mockupQuickCaptureButton" class="secondary-button" type="button">Captura visual (PNG)</button>
+            </div>
+          </section>
         </div>
       </section>
-
-      <section class="logs-panel" aria-label="Logs del plugin">
-        <div class="logs-panel__header">
-          <p class="filter-label">Logs</p>
-          <button id="clearLogsButton" class="secondary-button secondary-button--small" type="button">
-            Netejar logs
-          </button>
-        </div>
-        <div id="logList" class="log-list" aria-live="polite"></div>
-      </section>
-
-      <footer class="footer">
-        <div class="footer-summary">
-          <span id="selectionCount" class="selection-count">0 seleccionades</span>
-          <span id="downloadLocationNote" class="footer-note">Descarregues i captures a Downloads/Image Picker/.</span>
-        </div>
-        <div class="footer-actions">
-          <div class="action-group" aria-label="Captures">
-            <button
-              id="captureElementButton"
-              class="secondary-button"
-              type="button"
-              title="Retalla nomes l'element o card que cliquis"
-            >
-              Captura bloc
-            </button>
-          </div>
-          <button id="downloadButton" class="primary-button" type="button" disabled>Descarregar</button>
-        </div>
-      </footer>
     </main>
 
     <div id="previewModal" class="preview-modal" hidden>

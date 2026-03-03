@@ -7,9 +7,47 @@ export function collectImagesFromPage() {
     "gif",
     "svg",
     "avif",
+    "bin",
   ]);
   const urls = new Set();
   const images = [];
+
+  function inferExtension(rawUrl) {
+    if (!rawUrl) {
+      return "";
+    }
+
+    const value = String(rawUrl).trim();
+    if (!value) {
+      return "";
+    }
+
+    const dataMimeMatch = value.match(/^data:image\/([a-z0-9.+-]+);/i);
+    if (dataMimeMatch?.[1]) {
+      const mimeToken = dataMimeMatch[1].toLowerCase();
+      if (mimeToken === "jpeg") return "jpg";
+      if (mimeToken === "svg+xml") return "svg";
+      if (["png", "jpg", "webp", "gif", "svg", "avif"].includes(mimeToken)) {
+        return mimeToken;
+      }
+      return "bin";
+    }
+
+    if (/^blob:/i.test(value)) {
+      return "bin";
+    }
+
+    try {
+      const parsed = new URL(value, window.location.href);
+      const pathname = parsed.pathname.toLowerCase();
+      if (!pathname.includes(".")) {
+        return "";
+      }
+      return pathname.split(".").pop() || "";
+    } catch {
+      return "";
+    }
+  }
 
   function addImage(rawUrl, sourceType, alt, width, height) {
     if (!rawUrl) {
@@ -18,8 +56,7 @@ export function collectImagesFromPage() {
 
     try {
       const parsed = new URL(rawUrl, window.location.href);
-      const pathname = parsed.pathname.toLowerCase();
-      const extension = pathname.includes(".") ? pathname.split(".").pop() : "";
+      const extension = inferExtension(parsed.href);
 
       if (!supportedExtensions.has(extension) || urls.has(parsed.href)) {
         return;

@@ -56,6 +56,7 @@ export const state = {
   elementAnalysis: null,
   rawElementAnalysis: null,
   elementSvgPreviewUrl: "",
+  workspaceSegment: "general",
 };
 
 export function initializeStateFromUrl(urlParams) {
@@ -63,4 +64,5 @@ export function initializeStateFromUrl(urlParams) {
   state.sourceTabId = Number.parseInt(urlParams.get("tabId") || "", 10);
   state.sourceWindowId = Number.parseInt(urlParams.get("windowId") || "", 10);
   state.hideFixedSticky = urlParams.get("hideFixedSticky") !== "0";
+  state.workspaceSegment = urlParams.get("segment") === "mockup" ? "mockup" : "general";
 }

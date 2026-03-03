@@ -21,6 +21,28 @@ const actions = createPopupActions(state, elements, renderer, logs);
 
 registerRuntimeEvents(state, elements, renderer, logs);
 
+function setWorkspaceSegment(segment) {
+  const nextSegment = segment === "mockup" ? "mockup" : "general";
+  state.workspaceSegment = nextSegment;
+  document.body.dataset.segment = nextSegment;
+
+  const isMockup = nextSegment === "mockup";
+  elements.segmentGeneralButton.setAttribute("aria-pressed", isMockup ? "false" : "true");
+  elements.segmentMockupButton.setAttribute("aria-pressed", isMockup ? "true" : "false");
+  elements.segmentGeneralView.hidden = isMockup;
+  elements.segmentMockupView.hidden = !isMockup;
+}
+
+setWorkspaceSegment(state.workspaceSegment);
+
+elements.segmentGeneralButton.addEventListener("click", () => {
+  setWorkspaceSegment("general");
+});
+
+elements.segmentMockupButton.addEventListener("click", () => {
+  setWorkspaceSegment("mockup");
+});
+
 elements.hideFixedStickyCheckbox.addEventListener("change", () => {
   state.hideFixedSticky = elements.hideFixedStickyCheckbox.checked;
   saveSettings(elements, logs);
@@ -59,6 +81,18 @@ elements.captureElementButton.addEventListener("click", () => {
 
 elements.analyzeElementButton.addEventListener("click", () => {
   actions.analyzeElement();
+});
+
+elements.mockupQuickAnalyzeButton.addEventListener("click", () => {
+  actions.analyzeElement();
+});
+
+elements.mockupQuickCaptureButton.addEventListener("click", () => {
+  actions.startElementCaptureFlow();
+});
+
+elements.mockupQuickZipButton.addEventListener("click", () => {
+  actions.downloadBlockBundle();
 });
 
 elements.refreshButton.addEventListener("click", () => {

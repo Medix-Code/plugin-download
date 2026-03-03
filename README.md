@@ -46,7 +46,10 @@ Extensio de Chrome per revisar les imatges visibles de la pestanya actual, desca
 - Les analisis de bloc es poden copiar al porta-retalls o guardar com JSON a `Downloads/Image Picker/`.
 - L'opcio `Exportar plantilla` crea una plantilla JSON per reconstruir capes en eines externes (p. ex. GIMP/Photopea).
 - `Descarrega bloc ZIP` empaqueta `plantilla_mockup.json`, `plantilla_mockup.svg` i assets del bloc en un unic fitxer ZIP.
+- `Descarrega bloc ZIP` admet assets `http/https`, `blob:`, `data:image/*` i `filesystem:` quan el navegador els deixa llegir des de la pestanya.
+- Detall de compatibilitat i limits: `docs/mockup-source-compat.md`.
 - Quan detecta parella `screen + frame`, tambe afegeix `mockup_editable.svg` amb `replaceable_screen` (clipPath) per substituir la captura interna mes rapid en Inkscape/GIMP.
+- En casos complexos, tambe afegeix `mockup_editable_simple.svg` com a fallback estable (sense warp matrix agressiu).
 - Quan analitzes un bloc, el filtre `Bloc analitzat` deixa veure nomes les imatges detectades dins aquell bloc.
 - Si la pestanya es `chrome://` o una pagina protegida del navegador, Chrome no deixara escanejar-la.
 - `Captura bloc` retalla nomes l'element que cliquis a la pagina, util per previews amb gradient i composicio final.

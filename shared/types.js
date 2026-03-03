@@ -55,6 +55,10 @@
  * @property {"root"|"image"|"background"|"text"|"shape"|"unknown"} role
  * @property {string} selector
  * @property {string} tagName
+ * @property {string} [imageSourceType]
+ * @property {boolean} [canvasReadable]
+ * @property {number} [canvasWidth]
+ * @property {number} [canvasHeight]
  * @property {Object} rect
  * @property {number} zIndex
  * @property {string} opacity
@@ -88,12 +92,13 @@
  * @property {string} exportedAt
  * @property {{url: string, title: string}} source
  * @property {{selector: string, tagName: string, size: {width: number, height: number}}} element
+ * @property {{left: number, top: number, width: number, height: number, viewportWidth: number, viewportHeight: number}} [captureSelection]
  * @property {{width: number, height: number, contentBounds: {x: number, y: number, width: number, height: number}}} canvas
  * @property {Object} styles
  * @property {Object} typography
  * @property {ElementAnalysisLayer[]} layers
  * @property {Array<{id: string, selector: string, role: string, sources: string[]}>} replaceableLayers
- * @property {{detected: boolean, svgFilename: string, screenLayerId?: string, frameLayerId?: string, screenSelector?: string, frameSelector?: string, screenRect?: {x: number, y: number, width: number, height: number}, frameRect?: {x: number, y: number, width: number, height: number}, screenClipRadius?: {rx: number, ry: number}, screenAsset?: string, frameAsset?: string, reason?: string}} [editableMockup]
+ * @property {{detected: boolean, svgFilename: string, simpleSvgFilename?: string, screenLayerId?: string, frameLayerId?: string, screenSelector?: string, frameSelector?: string, screenRect?: {x: number, y: number, width: number, height: number}, frameRect?: {x: number, y: number, width: number, height: number}, screenClipRadius?: {rx: number, ry: number}, screenWarp?: {transform: string, transformOrigin: string, layoutWidth: number, layoutHeight: number, rotationDeg: number, matrix?: {a: number, b: number, c: number, d: number, e: number, f: number, perspective: boolean, perspectiveApproximation: boolean}}, frameWarp?: {transform: string, transformOrigin: string, layoutWidth: number, layoutHeight: number, rotationDeg: number, matrix?: {a: number, b: number, c: number, d: number, e: number, f: number, perspective: boolean, perspectiveApproximation: boolean}}, screenAsset?: string, frameAsset?: string, screenMaskSource?: string, screenMaskFilename?: string, reason?: string}} [editableMockup]
  * @property {string[]} notes
  */
 

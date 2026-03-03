@@ -9,8 +9,12 @@ import {
 import { isUpscaleSupportedUrl, normalizeUpscaleOptions } from "./core.js";
 
 export async function fetchBytesViaTab(tabId, url) {
+  const targetWorld = /^(blob:|filesystem:)/i.test(String(url || ""))
+    ? "MAIN"
+    : "ISOLATED";
   const results = await chrome.scripting.executeScript({
     target: { tabId },
+    world: targetWorld,
     func: async (fetchUrl) => {
       try {
         const response = await fetch(fetchUrl, { credentials: "include" });
@@ -49,6 +53,53 @@ export async function fetchBytesViaTab(tabId, url) {
   }
   const mimeType = result.contentType || "application/octet-stream";
   return new Blob([bytes], { type: mimeType });
+}
+
+function extensionFromMimeType(mimeType) {
+  const normalized = String(mimeType || "").toLowerCase();
+
+  if (normalized.includes("image/jpeg")) {
+    return "jpg";
+  }
+  if (normalized.includes("image/png")) {
+    return "png";
+  }
+  if (normalized.includes("image/webp")) {
+    return "webp";
+  }
+  if (normalized.includes("image/gif")) {
+    return "gif";
+  }
+  if (normalized.includes("image/svg")) {
+    return "svg";
+  }
+  if (normalized.includes("image/avif")) {
+    return "avif";
+  }
+
+  return "";
+}
+
+function normalizeFilenameByBlobMimeType(filename, blob) {
+  const rawName = String(filename || "").trim();
+  if (!rawName) {
+    return filename;
+  }
+
+  const extension = rawName.includes(".")
+    ? rawName.split(".").pop()?.toLowerCase() || ""
+    : "";
+
+  if (extension !== "bin") {
+    return filename;
+  }
+
+  const inferredExtension = extensionFromMimeType(blob?.type || "");
+  if (!inferredExtension) {
+    return filename;
+  }
+
+  return rawName.replace(/\.bin$/i, `.${inferredExtension}`);
 }
 
 export async function upscaleImageBlob(blob, factor) {
@@ -113,9 +164,10 @@ export async function buildProcessedDownload(url, index, options = {}) {
     : archiveEntry
       ? buildArchiveEntryName(url, index)
       : buildFilename(url, index);
+  const normalizedFilename = normalizeFilenameByBlobMimeType(filename, finalBlob);
 
   return {
-    filename,
+    filename: normalizedFilename,
     blob: finalBlob,
     upscaled: canUpscale,
   };

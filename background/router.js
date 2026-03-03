@@ -4,6 +4,7 @@ import { getErrorMessage } from "../shared/errors.js";
 import { downloadImages } from "./downloads/index.js";
 import {
   captureVisibleTabAndDownload,
+  captureVisibleTabSnapshot,
   injectElementSelectionOverlay,
   notifyElementCaptureCancelled,
   runElementCaptureSelection,
@@ -171,7 +172,30 @@ export function startBackgroundRouter() {
         windowId: message.windowId,
         saveAs: message.saveAs === true,
         upscale: message.upscale,
+        returnDataUrl: message.returnDataUrl === true,
       });
+
+      if (message.returnDataUrl === true) {
+        captureVisibleTabSnapshot(
+          message.windowId,
+          hasValidSelection(message) ? message.selection : null,
+        )
+          .then((dataUrl) => {
+            sendResponse({
+              ok: true,
+              dataUrl,
+              selectionApplied: hasValidSelection(message),
+            });
+          })
+          .catch((error) => {
+            emitPluginLog("error", "Error capturant la vista per fallback.", {
+              message: getErrorMessage(error),
+            });
+            sendResponse({ ok: false, error: error.message });
+          });
+
+        return true;
+      }
 
       captureVisibleTabAndDownload(message.windowId, {
         saveAs: message.saveAs === true,

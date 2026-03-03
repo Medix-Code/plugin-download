@@ -255,6 +255,16 @@ export function createRenderer(state, elements) {
     elements.analysisPreviewPanel.hidden = elements.analysisAssetGallery.hidden;
   }
 
+  function setAnalysisReadyState(hasAnalysis) {
+    const isReady = Boolean(hasAnalysis);
+
+    elements.downloadBlockBundleButton.disabled = !isReady;
+    elements.mockupQuickZipButton.disabled = !isReady;
+
+    elements.analyzeElementButton.classList.toggle("secondary-button--done", isReady);
+    elements.mockupQuickAnalyzeButton.classList.toggle("secondary-button--done", isReady);
+  }
+
   function renderElementAnalysis(analysis, options = {}) {
     state.elementAnalysis = analysis;
     const selector = analysis?.element?.selector || analysis?.element?.tagName || "";
@@ -274,7 +284,7 @@ export function createRenderer(state, elements) {
     elements.analysisPanel.hidden = false;
     elements.copyAnalysisButton.disabled = false;
     elements.saveAnalysisButton.disabled = false;
-    elements.downloadBlockBundleButton.disabled = false;
+    setAnalysisReadyState(true);
     elements.clearAnalysisButton.disabled = false;
   }
 
@@ -290,7 +300,7 @@ export function createRenderer(state, elements) {
     elements.analysisPanel.hidden = true;
     elements.copyAnalysisButton.disabled = true;
     elements.saveAnalysisButton.disabled = true;
-    elements.downloadBlockBundleButton.disabled = true;
+    setAnalysisReadyState(false);
     elements.clearAnalysisButton.disabled = true;
   }
 
@@ -540,6 +550,7 @@ export function createRenderer(state, elements) {
     renderElementAnalysis,
     renderAnalysisDetectedAssets,
     renderAnalysisSvgPreview,
+    setAnalysisReadyState,
     clearElementAnalysis,
     getVisibleImages: () => getPagination(state).pageItems,
   };
