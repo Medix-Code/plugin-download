@@ -74,6 +74,10 @@
  * @property {string} backgroundImage
  * @property {string} text
  * @property {string} maskImage
+ * @property {string} maskSize
+ * @property {string} maskPosition
+ * @property {string} maskRepeat
+ * @property {string} maskSource
  * @property {string[]} sources
  * @property {boolean} replaceable
  */
@@ -89,6 +93,7 @@
  * @property {Object} typography
  * @property {ElementAnalysisLayer[]} layers
  * @property {Array<{id: string, selector: string, role: string, sources: string[]}>} replaceableLayers
+ * @property {{detected: boolean, svgFilename: string, screenLayerId?: string, frameLayerId?: string, screenSelector?: string, frameSelector?: string, screenRect?: {x: number, y: number, width: number, height: number}, frameRect?: {x: number, y: number, width: number, height: number}, screenClipRadius?: {rx: number, ry: number}, screenAsset?: string, frameAsset?: string, reason?: string}} [editableMockup]
  * @property {string[]} notes
  */
 

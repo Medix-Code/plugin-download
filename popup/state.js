@@ -52,8 +52,10 @@ export const state = {
   hideFixedSticky: true,
   sourceTabUrl: "",
   elementCaptureInProgress: false,
+  analysisInProgress: false,
   elementAnalysis: null,
   rawElementAnalysis: null,
+  elementSvgPreviewUrl: "",
 };
 
 export function initializeStateFromUrl(urlParams) {

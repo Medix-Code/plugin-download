@@ -124,7 +124,138 @@ export function createRenderer(state, elements) {
     }
   }
 
-  function renderElementAnalysis(analysis) {
+  function normalizePreviewAssets(assets = []) {
+    const normalized = [];
+    const seen = new Set();
+
+    for (const entry of Array.isArray(assets) ? assets : []) {
+      if (typeof entry === "string") {
+        const url = entry.trim();
+        if (!/^https?:\/\//i.test(url)) {
+          continue;
+        }
+        const key = `url:${url}`;
+        if (seen.has(key)) {
+          continue;
+        }
+        seen.add(key);
+        normalized.push({
+          key,
+          url,
+          previewUrl: url,
+          label: "",
+        });
+        continue;
+      }
+
+      if (!entry || typeof entry !== "object") {
+        continue;
+      }
+
+      const url = typeof entry.url === "string" ? entry.url.trim() : "";
+      const previewUrl =
+        typeof entry.previewUrl === "string" ? entry.previewUrl.trim() : "";
+      if (!url && !previewUrl) {
+        continue;
+      }
+
+      const key =
+        (typeof entry.key === "string" && entry.key.trim()) ||
+        (url ? `url:${url}` : `preview:${previewUrl}`);
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+
+      normalized.push({
+        key,
+        url,
+        previewUrl: previewUrl || url,
+        label: typeof entry.label === "string" ? entry.label : "",
+        kind: typeof entry.kind === "string" ? entry.kind : "image",
+        maskUrl: typeof entry.maskUrl === "string" ? entry.maskUrl : "",
+        fillColor: typeof entry.fillColor === "string" ? entry.fillColor : "",
+      });
+    }
+
+    return normalized.slice(0, 40);
+  }
+
+  function renderAnalysisDetectedAssets(assets = []) {
+    elements.analysisAssetList.replaceChildren();
+    const normalizedAssets = normalizePreviewAssets(assets);
+
+    if (normalizedAssets.length === 0) {
+      elements.analysisAssetGallery.hidden = true;
+      return;
+    }
+
+    const fragment = document.createDocumentFragment();
+
+    for (const asset of normalizedAssets) {
+      const openUrl = asset.url || asset.previewUrl;
+      const itemButton = document.createElement("button");
+      itemButton.type = "button";
+      itemButton.className = "analysis-asset-item";
+      itemButton.title = asset.label || getDisplayName(asset.url || asset.previewUrl);
+      itemButton.addEventListener("click", () => {
+        openPreview({
+          url: openUrl,
+          alt: getDisplayName(asset.url || asset.previewUrl),
+          displayUrl: asset.url || asset.previewUrl,
+        });
+      });
+
+      if (asset.kind === "mask-color" && asset.maskUrl && asset.fillColor) {
+        const thumb = document.createElement("div");
+        thumb.className = "analysis-asset-thumb analysis-asset-thumb--mask";
+        thumb.style.backgroundColor = asset.fillColor;
+        thumb.style.maskImage = `url("${asset.maskUrl}")`;
+        thumb.style.maskRepeat = "no-repeat";
+        thumb.style.maskPosition = "center";
+        thumb.style.maskSize = "contain";
+        thumb.style.webkitMaskImage = `url("${asset.maskUrl}")`;
+        thumb.style.webkitMaskRepeat = "no-repeat";
+        thumb.style.webkitMaskPosition = "center";
+        thumb.style.webkitMaskSize = "contain";
+        itemButton.append(thumb);
+      } else {
+        const thumb = document.createElement("img");
+        thumb.className = "analysis-asset-thumb";
+        thumb.src = asset.previewUrl || asset.url;
+        thumb.alt = getDisplayName(asset.url || asset.previewUrl);
+        thumb.loading = "lazy";
+        thumb.referrerPolicy = "no-referrer";
+        thumb.addEventListener("error", () => {
+          thumb.classList.add("analysis-asset-thumb--error");
+          thumb.alt = "No s'ha pogut carregar";
+        });
+        itemButton.append(thumb);
+      }
+      fragment.append(itemButton);
+    }
+
+    elements.analysisAssetList.append(fragment);
+    elements.analysisAssetGallery.hidden = false;
+  }
+
+  function renderAnalysisSvgPreview() {
+    const svgUrl = String(state.elementSvgPreviewUrl || "").trim();
+    const hasSvgPreview = svgUrl.startsWith("data:image/svg+xml");
+
+    if (hasSvgPreview) {
+      elements.analysisSvgPreview.hidden = false;
+      elements.analysisSvgPreview.src = svgUrl;
+      elements.analysisPreviewPanel.hidden = false;
+      return;
+    }
+
+    elements.analysisSvgPreview.hidden = true;
+    elements.analysisSvgPreview.removeAttribute("src");
+    elements.analysisPreviewPanel.hidden = elements.analysisAssetGallery.hidden;
+  }
+
+  function renderElementAnalysis(analysis, options = {}) {
     state.elementAnalysis = analysis;
     const selector = analysis?.element?.selector || analysis?.element?.tagName || "";
     const width = analysis?.element?.rect?.width;
@@ -137,7 +268,9 @@ export function createRenderer(state, elements) {
     elements.analysisSummary.textContent = [selector, sizeLabel]
       .filter(Boolean)
       .join(" · ");
-    elements.analysisOutput.textContent = JSON.stringify(analysis, null, 2);
+    elements.analysisOutput.value = JSON.stringify(analysis, null, 2);
+    renderAnalysisDetectedAssets(options.previewUrls || []);
+    renderAnalysisSvgPreview();
     elements.analysisPanel.hidden = false;
     elements.copyAnalysisButton.disabled = false;
     elements.saveAnalysisButton.disabled = false;
@@ -149,7 +282,12 @@ export function createRenderer(state, elements) {
   function clearElementAnalysis() {
     state.elementAnalysis = null;
     elements.analysisSummary.textContent = "";
-    elements.analysisOutput.textContent = "";
+    elements.analysisOutput.value = "";
+    elements.analysisAssetList.replaceChildren();
+    elements.analysisAssetGallery.hidden = true;
+    elements.analysisSvgPreview.hidden = true;
+    elements.analysisSvgPreview.removeAttribute("src");
+    elements.analysisPreviewPanel.hidden = true;
     elements.analysisPanel.hidden = true;
     elements.copyAnalysisButton.disabled = true;
     elements.saveAnalysisButton.disabled = true;
@@ -167,7 +305,7 @@ export function createRenderer(state, elements) {
     elements.previewImage.src = image.url;
     elements.previewImage.alt = image.alt || getDisplayName(image.url);
     elements.previewTitle.textContent = getDisplayName(image.url);
-    elements.previewUrl.textContent = image.url;
+    elements.previewUrl.textContent = image.displayUrl || image.url;
     elements.previewModal.hidden = false;
   }
 
@@ -402,6 +540,8 @@ export function createRenderer(state, elements) {
     renderSizeFilters: () => renderSizeFilters(renderAll),
     renderScopeFilters: () => renderScopeFilters(renderAll),
     renderElementAnalysis,
+    renderAnalysisDetectedAssets,
+    renderAnalysisSvgPreview,
     clearElementAnalysis,
     getVisibleImages: () => getPagination(state).pageItems,
   };

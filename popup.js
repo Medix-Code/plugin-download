@@ -95,6 +95,16 @@ elements.saveTemplateButton.addEventListener("click", () => {
   actions.saveMockupTemplate();
 });
 
+elements.analysisOutput.addEventListener("input", () => {
+  actions.handleAnalysisEditorInput();
+});
+
+elements.analysisSvgPreview.addEventListener("error", () => {
+  elements.analysisSvgPreview.hidden = true;
+  elements.analysisSvgPreview.removeAttribute("src");
+  elements.analysisPreviewPanel.hidden = elements.analysisAssetGallery.hidden;
+});
+
 elements.downloadBlockBundleButton.addEventListener("click", () => {
   actions.downloadBlockBundle();
 });

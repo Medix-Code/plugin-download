@@ -83,6 +83,7 @@
               id="analyzeElementButton"
               class="secondary-button"
               type="button"
+              aria-pressed="false"
               title="Analitza colors, tipografia i estils del bloc que cliquis"
             >
               Analitza bloc
@@ -103,7 +104,22 @@
             </button>
           </div>
           <p id="analysisSummary" class="analysis-summary"></p>
-          <pre id="analysisOutput" class="analysis-output"></pre>
+          <div class="analysis-content">
+            <textarea
+              id="analysisOutput"
+              class="analysis-output"
+              spellcheck="false"
+              aria-label="JSON de l'analisi del bloc"
+            ></textarea>
+            <aside id="analysisPreviewPanel" class="analysis-preview-panel" hidden>
+              <p class="analysis-preview-label">Preview SVG</p>
+              <img id="analysisSvgPreview" class="analysis-preview-image" alt="Preview SVG del bloc analitzat" />
+              <div id="analysisAssetGallery" class="analysis-asset-gallery" hidden>
+                <p class="analysis-preview-label">Imatges detectades</p>
+                <div id="analysisAssetList" class="analysis-asset-list"></div>
+              </div>
+            </aside>
+          </div>
           <div class="analysis-buttons">
             <button id="copyAnalysisButton" class="secondary-button secondary-button--small" type="button" disabled>
               Copiar JSON
