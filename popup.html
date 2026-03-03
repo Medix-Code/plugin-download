@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="ca">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Descarregador d'Imatges</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="app__header">
+        <div>
+          <p class="eyebrow">Image picker</p>
+          <h1>Selecciona les imatges</h1>
+          <p id="sourceSite" class="source-site" hidden>
+            Actuant sobre <span id="sourceSiteValue" class="source-site__value"></span>
+          </p>
+        </div>
+        <div class="header-actions">
+          <button
+            id="refreshButton"
+            class="icon-button"
+            type="button"
+            title="Reescanejar"
+            aria-label="Reescanejar"
+          >
+            ↻
+          </button>
+          <button
+            id="openWindowButton"
+            class="icon-button"
+            type="button"
+            title="Obrir en una finestra nova"
+            aria-label="Obrir en una finestra nova"
+          >
+            <svg viewBox="0 0 24 24" class="icon-button__glyph" aria-hidden="true">
+              <path
+                d="M14 5h5v5M10 14l9-9M19 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"
+                fill="none"
+                stroke="currentColor"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="1.8"
+              />
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <p id="statusMessage" class="status">Escanejant la pestanya actual...</p>
+
+      <section class="control-panel" aria-label="Controls principals">
+        <div class="toolbar">
+          <button id="selectAllButton" class="secondary-button" type="button">Seleccionar totes</button>
+          <button id="clearButton" class="secondary-button" type="button">Treure seleccio</button>
+        </div>
+
+        <div class="filter-grid">
+          <div class="filter-group">
+            <p class="filter-label">Origen</p>
+            <section id="scopeFilterBar" class="filter-bar" aria-label="Filtre per origen"></section>
+          </div>
+
+          <div class="filter-group">
+            <p class="filter-label">Tipus</p>
+            <section id="typeFilterBar" class="filter-bar" aria-label="Filtre per tipus"></section>
+          </div>
+
+          <div class="filter-group">
+            <p class="filter-label">Tamany</p>
+            <section id="sizeFilterBar" class="filter-bar" aria-label="Filtre per tamany"></section>
+          </div>
+        </div>
+
+        <p class="hint">
+          Els gradients CSS no tenen fitxer propi. Usa <strong>Captura bloc</strong> segons el que vulguis provar.
+        </p>
+
+        <section class="capture-controls" aria-label="Opcions de captura">
+          <label
+            class="toggle-option"
+            title="Configuracio interna de captura."
+            hidden
+          >
+            <input id="hideFixedStickyCheckbox" type="checkbox" checked />
+            <span>Configuracio interna de captura</span>
+          </label>
+          <p class="capture-note" hidden>
+            Configuracio interna.
+          </p>
+
+          <div class="analysis-actions">
+            <button
+              id="analyzeElementButton"
+              class="secondary-button"
+              type="button"
+              title="Analitza colors, tipografia i estils del bloc que cliquis"
+            >
+              Analitza bloc
+            </button>
+          </div>
+
+          <div id="fullPageProgressPanel" class="progress-panel" hidden>
+            <div class="progress-meta">
+              <span id="fullPageProgressText" class="progress-text">Preparant captura...</span>
+              <span id="fullPageProgressStats" class="progress-stats"></span>
+            </div>
+            <div class="progress-track" aria-hidden="true">
+              <div id="fullPageProgressBar" class="progress-bar"></div>
+            </div>
+          </div>
+        </section>
+
+        <section id="analysisPanel" class="analysis-panel" aria-label="Resultat d'analisi de bloc" hidden>
+          <div class="analysis-panel__header">
+            <p class="filter-label">Analisi del bloc</p>
+            <button
+              id="clearAnalysisButton"
+              class="secondary-button secondary-button--small"
+              type="button"
+              disabled
+            >
+              Netejar
+            </button>
+          </div>
+          <p id="analysisSummary" class="analysis-summary"></p>
+          <pre id="analysisOutput" class="analysis-output"></pre>
+          <div class="analysis-buttons">
+            <button id="copyAnalysisButton" class="secondary-button secondary-button--small" type="button" disabled>
+              Copiar JSON
+            </button>
+            <button id="saveAnalysisButton" class="secondary-button secondary-button--small" type="button" disabled>
+              Guardar JSON
+            </button>
+          </div>
+        </section>
+      </section>
+
+      <section class="results-panel">
+        <section id="imageList" class="image-list" aria-live="polite"></section>
+        <div id="paginationPanel" class="pagination-panel" hidden>
+          <button id="paginationPrevButton" class="secondary-button secondary-button--small" type="button">
+            Anterior
+          </button>
+          <p id="paginationInfo" class="pagination-info"></p>
+          <button id="paginationNextButton" class="secondary-button secondary-button--small" type="button">
+            Seguent
+          </button>
+        </div>
+      </section>
+
+      <section class="logs-panel" aria-label="Logs del plugin">
+        <div class="logs-panel__header">
+          <p class="filter-label">Logs</p>
+          <button id="clearLogsButton" class="secondary-button secondary-button--small" type="button">
+            Netejar logs
+          </button>
+        </div>
+        <div id="logList" class="log-list" aria-live="polite"></div>
+      </section>
+
+      <footer class="footer">
+        <div class="footer-summary">
+          <span id="selectionCount" class="selection-count">0 seleccionades</span>
+          <span id="downloadLocationNote" class="footer-note">Descarregues i captures a Downloads/Image Picker/.</span>
+        </div>
+        <div class="footer-actions">
+          <div class="action-group" aria-label="Captures">
+            <button
+              id="captureElementButton"
+              class="secondary-button"
+              type="button"
+              title="Retalla nomes l'element o card que cliquis"
+            >
+              Captura bloc
+            </button>
+          </div>
+          <button id="downloadButton" class="primary-button" type="button" disabled>Descarregar</button>
+        </div>
+      </footer>
+    </main>
+
+    <div id="previewModal" class="preview-modal" hidden>
+      <div class="preview-dialog" role="dialog" aria-modal="true" aria-labelledby="previewTitle">
+        <button id="closePreviewButton" class="preview-close" type="button" aria-label="Tancar preview">
+          ×
+        </button>
+        <img id="previewImage" class="preview-image" alt="" />
+        <p id="previewTitle" class="preview-title"></p>
+        <p id="previewUrl" class="preview-url"></p>
+      </div>
+    </div>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

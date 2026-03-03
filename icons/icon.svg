@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Icona descarrega imatges">
+  <defs>
+    <linearGradient id="bg" x1="16" y1="12" x2="112" y2="116" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0f172a" />
+      <stop offset="1" stop-color="#155e75" />
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="112" height="112" rx="24" fill="url(#bg)" />
+  <rect x="28" y="90" width="72" height="12" rx="6" fill="#5eead4" />
+  <path d="M64 28v34" fill="none" stroke="#ffffff" stroke-linecap="round" stroke-width="12" />
+  <path d="M42 58l22 22 22-22" fill="none" stroke="#ffffff" stroke-linecap="round" stroke-linejoin="round" stroke-width="12" />
+</svg>

@@ -1,0 +1,450 @@
+import {
+  getAvailableExtensions,
+  getFilteredImages,
+  getPagination,
+  getSourceLabel,
+} from "./filters.js";
+import { SIZE_FILTERS } from "./state.js";
+
+function getDisplayName(url) {
+  try {
+    const parsed = new URL(url);
+    const rawName = parsed.pathname.split("/").pop();
+    return rawName || parsed.hostname;
+  } catch {
+    return url;
+  }
+}
+
+function getDisplayPath(url) {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.hostname}${parsed.pathname}`;
+  } catch {
+    return url;
+  }
+}
+
+function getDomainLabel(url) {
+  if (!url) {
+    return "";
+  }
+
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname || parsed.origin || url;
+  } catch {
+    return url;
+  }
+}
+
+function getProgressPercentage(progress) {
+  if (!Number.isFinite(progress?.total) || progress.total <= 0) {
+    return 0;
+  }
+
+  return Math.max(
+    0,
+    Math.min(100, Math.round((progress.current / progress.total) * 100)),
+  );
+}
+
+export function createRenderer(state, elements) {
+  function updateSourceSite(url) {
+    const domainLabel = getDomainLabel(url);
+
+    if (!domainLabel) {
+      elements.sourceSite.hidden = true;
+      elements.sourceSiteValue.textContent = "";
+      return;
+    }
+
+    elements.sourceSiteValue.textContent = domainLabel;
+    elements.sourceSite.title = url;
+    elements.sourceSite.hidden = false;
+  }
+
+  function setFullPageProgress(progress) {
+    elements.fullPageProgressPanel.hidden = false;
+    elements.fullPageProgressBar.style.width = `${getProgressPercentage(progress)}%`;
+    elements.fullPageProgressText.textContent =
+      progress.message || "Capturant pagina...";
+    const parts = [];
+
+    if (Number.isFinite(progress.current) && Number.isFinite(progress.total)) {
+      parts.push(`${progress.current}/${progress.total}`);
+    }
+
+    if (Number.isFinite(progress.retries) && progress.retries > 0) {
+      parts.push(`${progress.retries} reintents`);
+    }
+
+    if (
+      Number.isFinite(progress.skippedDuplicatePositions) &&
+      progress.skippedDuplicatePositions > 0
+    ) {
+      parts.push(`${progress.skippedDuplicatePositions} posicions repetides`);
+    }
+
+    elements.fullPageProgressStats.textContent = parts.join(" · ");
+  }
+
+  function hideFullPageProgress() {
+    state.fullPageCaptureId = null;
+    elements.fullPageProgressPanel.hidden = true;
+    elements.fullPageProgressBar.style.width = "0%";
+    elements.fullPageProgressText.textContent = "Preparant captura...";
+    elements.fullPageProgressStats.textContent = "";
+  }
+
+  function updateSelectionCount() {
+    const pagination = getPagination(state);
+    state.currentPage = pagination.currentPage;
+    const totalSelectedCount = state.selectedUrls.size;
+    const visibleUrls = new Set(pagination.pageItems.map((image) => image.url));
+    const visibleCount = pagination.pageItems.length;
+    let visibleSelectedCount = 0;
+
+    for (const url of state.selectedUrls) {
+      if (visibleUrls.has(url)) {
+        visibleSelectedCount += 1;
+      }
+    }
+
+    if (
+      state.activeExtension === "all" &&
+      state.activeSizeKey === "all" &&
+      state.activeScope === "all"
+    ) {
+      elements.selectionCount.textContent = `${totalSelectedCount} seleccionades · Pag ${pagination.currentPage}/${pagination.totalPages}`;
+    } else {
+      elements.selectionCount.textContent = `${visibleSelectedCount}/${visibleCount} visibles · ${totalSelectedCount} totals seleccionades`;
+    }
+
+    elements.downloadButton.disabled = totalSelectedCount === 0;
+  }
+
+  function renderScopeFilters(renderAll) {
+    elements.scopeFilterBar.replaceChildren();
+
+    const allCount = getFilteredImages(state, {
+      extension: "all",
+      sizeKey: "all",
+      imageScope: "all",
+    }).length;
+    const analysisCount = getFilteredImages(state, {
+      extension: "all",
+      sizeKey: "all",
+      imageScope: "analysis",
+    }).length;
+
+    const scopeFilters = [
+      {
+        key: "all",
+        label: `Totes fonts (${allCount})`,
+        disabled: false,
+      },
+      {
+        key: "analysis",
+        label: `Bloc analitzat (${analysisCount})`,
+        disabled: analysisCount === 0,
+      },
+    ];
+
+    for (const filter of scopeFilters) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "filter-pill";
+      button.textContent = filter.label;
+      button.disabled = filter.disabled;
+      button.classList.toggle("filter-pill--active", state.activeScope === filter.key);
+      button.addEventListener("click", () => {
+        state.activeScope = filter.key;
+        state.activeExtension = "all";
+        state.currentPage = 1;
+        renderAll();
+      });
+      elements.scopeFilterBar.append(button);
+    }
+  }
+
+  function renderElementAnalysis(analysis) {
+    state.elementAnalysis = analysis;
+    const selector = analysis?.element?.selector || analysis?.element?.tagName || "";
+    const width = analysis?.element?.rect?.width;
+    const height = analysis?.element?.rect?.height;
+    const sizeLabel =
+      Number.isFinite(width) && Number.isFinite(height)
+        ? `${width} x ${height}`
+        : "";
+
+    elements.analysisSummary.textContent = [selector, sizeLabel]
+      .filter(Boolean)
+      .join(" · ");
+    elements.analysisOutput.textContent = JSON.stringify(analysis, null, 2);
+    elements.analysisPanel.hidden = false;
+    elements.copyAnalysisButton.disabled = false;
+    elements.saveAnalysisButton.disabled = false;
+    elements.clearAnalysisButton.disabled = false;
+  }
+
+  function clearElementAnalysis() {
+    state.elementAnalysis = null;
+    elements.analysisSummary.textContent = "";
+    elements.analysisOutput.textContent = "";
+    elements.analysisPanel.hidden = true;
+    elements.copyAnalysisButton.disabled = true;
+    elements.saveAnalysisButton.disabled = true;
+    elements.clearAnalysisButton.disabled = true;
+  }
+
+  function closePreview() {
+    elements.previewModal.hidden = true;
+    elements.previewImage.removeAttribute("src");
+  }
+
+  function openPreview(image) {
+    elements.previewImage.src = image.url;
+    elements.previewImage.alt = image.alt || getDisplayName(image.url);
+    elements.previewTitle.textContent = getDisplayName(image.url);
+    elements.previewUrl.textContent = image.url;
+    elements.previewModal.hidden = false;
+  }
+
+  function toggleUrl(url, checked) {
+    if (checked) {
+      state.selectedUrls.add(url);
+    } else {
+      state.selectedUrls.delete(url);
+    }
+
+    updateSelectionCount();
+  }
+
+  function createCard(image) {
+    const article = document.createElement("article");
+    article.className = "image-card";
+    article.dataset.url = image.url;
+
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = state.selectedUrls.has(image.url);
+    checkbox.addEventListener("change", () => {
+      toggleUrl(image.url, checkbox.checked);
+      article.classList.toggle("image-card--selected", checkbox.checked);
+    });
+
+    const preview = document.createElement("img");
+    preview.className = "image-preview";
+    preview.src = image.url;
+    preview.alt = image.alt || getDisplayName(image.url);
+    preview.loading = "lazy";
+    preview.referrerPolicy = "no-referrer";
+    preview.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openPreview(image);
+    });
+    preview.addEventListener("error", () => {
+      const fallback = document.createElement("div");
+      fallback.className = "image-preview image-preview--error";
+      fallback.textContent = "Sense preview";
+      preview.replaceWith(fallback);
+    });
+
+    const meta = document.createElement("div");
+    meta.className = "image-meta";
+
+    const metaTop = document.createElement("div");
+    metaTop.className = "image-meta-top";
+
+    const extensionChip = document.createElement("span");
+    extensionChip.className = "meta-chip meta-chip--muted";
+    extensionChip.textContent = image.extension.toUpperCase();
+
+    const name = document.createElement("p");
+    name.className = "image-name";
+    name.textContent = getDisplayName(image.url);
+
+    const url = document.createElement("p");
+    url.className = "image-url";
+    url.textContent = getDisplayPath(image.url);
+
+    const size = document.createElement("p");
+    size.className = "image-size";
+    size.textContent = `${image.width || "?"} x ${image.height || "?"}`;
+
+    if (image.sourceType === "background") {
+      const sourceChip = document.createElement("span");
+      sourceChip.className = "meta-chip";
+      sourceChip.textContent = getSourceLabel(image);
+      metaTop.append(sourceChip);
+    }
+
+    metaTop.append(extensionChip);
+    meta.append(metaTop, name, url, size);
+    article.append(checkbox, preview, meta);
+    article.classList.toggle("image-card--selected", checkbox.checked);
+
+    article.addEventListener("click", (event) => {
+      if (event.target === checkbox) {
+        return;
+      }
+
+      checkbox.checked = !checkbox.checked;
+      checkbox.dispatchEvent(new Event("change"));
+    });
+
+    return article;
+  }
+
+  function renderTypeFilters(renderAll) {
+    elements.typeFilterBar.replaceChildren();
+
+    const extensions = getAvailableExtensions(state);
+
+    if (extensions.length === 0) {
+      return;
+    }
+
+    const filters = [
+      {
+        key: "all",
+        label: `Totes (${getFilteredImages(state, { extension: "all", sizeKey: state.activeSizeKey }).length})`,
+      },
+      ...extensions.map((extension) => ({
+        key: extension,
+        label: `${extension.toUpperCase()} (${getFilteredImages(state, { extension, sizeKey: state.activeSizeKey }).length})`,
+      })),
+    ];
+
+    for (const filter of filters) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "filter-pill";
+      button.textContent = filter.label;
+      button.classList.toggle(
+        "filter-pill--active",
+        state.activeExtension === filter.key,
+      );
+      button.addEventListener("click", () => {
+        state.activeExtension = filter.key;
+        state.currentPage = 1;
+        renderAll();
+      });
+      elements.typeFilterBar.append(button);
+    }
+  }
+
+  function renderSizeFilters(renderAll) {
+    elements.sizeFilterBar.replaceChildren();
+
+    for (const filter of SIZE_FILTERS) {
+      const count = getFilteredImages(state, {
+        extension: state.activeExtension,
+        sizeKey: filter.key,
+      }).length;
+
+      if (
+        filter.key !== "all" &&
+        count === 0 &&
+        state.activeSizeKey !== filter.key
+      ) {
+        continue;
+      }
+
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "filter-pill";
+      button.textContent = `${filter.label} (${count})`;
+      button.classList.toggle(
+        "filter-pill--active",
+        state.activeSizeKey === filter.key,
+      );
+      button.addEventListener("click", () => {
+        state.activeSizeKey = filter.key;
+        state.currentPage = 1;
+        renderAll();
+      });
+      elements.sizeFilterBar.append(button);
+    }
+  }
+
+  function renderPagination(pagination) {
+    if (pagination.totalItems <= pagination.pageSize) {
+      elements.paginationPanel.hidden = true;
+      elements.paginationInfo.textContent = "";
+      elements.paginationPrevButton.disabled = true;
+      elements.paginationNextButton.disabled = true;
+      return;
+    }
+
+    elements.paginationPanel.hidden = false;
+    elements.paginationInfo.textContent =
+      `${pagination.startIndex + 1}-${pagination.endIndex} de ${pagination.totalItems} · Pagina ${pagination.currentPage}/${pagination.totalPages}`;
+    elements.paginationPrevButton.disabled = pagination.currentPage <= 1;
+    elements.paginationNextButton.disabled =
+      pagination.currentPage >= pagination.totalPages;
+  }
+
+  function renderImages(renderAll) {
+    elements.imageList.replaceChildren();
+    const pagination = getPagination(state);
+    state.currentPage = pagination.currentPage;
+    const filteredImages = pagination.allItems;
+
+    if (state.images.length === 0) {
+      const emptyState = document.createElement("div");
+      emptyState.className = "empty-state";
+      emptyState.textContent =
+        "No s'han trobat imatges compatibles a la pestanya actual.";
+      elements.imageList.append(emptyState);
+      renderPagination(pagination);
+      updateSelectionCount();
+      return;
+    }
+
+    if (filteredImages.length === 0) {
+      const emptyState = document.createElement("div");
+      emptyState.className = "empty-state";
+      emptyState.textContent =
+        "No hi ha imatges que compleixin els filtres actius.";
+      elements.imageList.append(emptyState);
+      renderPagination(pagination);
+      updateSelectionCount();
+      return;
+    }
+
+    const fragment = document.createDocumentFragment();
+
+    for (const image of pagination.pageItems) {
+      fragment.append(createCard(image));
+    }
+
+    elements.imageList.append(fragment);
+    renderPagination(pagination);
+    updateSelectionCount();
+  }
+
+  function renderAll() {
+    renderScopeFilters(renderAll);
+    renderImages(renderAll);
+    renderTypeFilters(renderAll);
+    renderSizeFilters(renderAll);
+  }
+
+  return {
+    updateSourceSite,
+    setFullPageProgress,
+    hideFullPageProgress,
+    updateSelectionCount,
+    closePreview,
+    renderAll,
+    renderImages: () => renderImages(renderAll),
+    renderTypeFilters: () => renderTypeFilters(renderAll),
+    renderSizeFilters: () => renderSizeFilters(renderAll),
+    renderScopeFilters: () => renderScopeFilters(renderAll),
+    renderElementAnalysis,
+    clearElementAnalysis,
+    getVisibleImages: () => getPagination(state).pageItems,
+  };
+}
