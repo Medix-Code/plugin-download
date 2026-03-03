@@ -453,6 +453,88 @@ function parseAffineTransformFromCss(transformValue) {
     e: m41,
     f: m42,
     perspective,
+    rawMatrix3d: {
+      m11,
+      m12,
+      m13,
+      m14,
+      m21,
+      m22,
+      m23,
+      m24,
+      m31,
+      m32,
+      m33,
+      m34,
+      m41,
+      m42,
+      m43,
+      m44,
+    },
+  };
+}
+
+function projectPointWithMatrix3d(matrix, x, y) {
+  if (!matrix) {
+    return null;
+  }
+
+  const numeratorX = matrix.m11 * x + matrix.m21 * y + matrix.m41;
+  const numeratorY = matrix.m12 * x + matrix.m22 * y + matrix.m42;
+  const denominator = matrix.m14 * x + matrix.m24 * y + matrix.m44;
+
+  if (!Number.isFinite(numeratorX) || !Number.isFinite(numeratorY) || !Number.isFinite(denominator)) {
+    return null;
+  }
+  if (Math.abs(denominator) < 1e-6) {
+    return null;
+  }
+
+  return {
+    x: numeratorX / denominator,
+    y: numeratorY / denominator,
+  };
+}
+
+function approximateAffineFromPerspective(affine, layoutW, layoutH, boxX, boxY) {
+  if (!affine?.rawMatrix3d || layoutW <= 0 || layoutH <= 0) {
+    return null;
+  }
+
+  const p00 = projectPointWithMatrix3d(affine.rawMatrix3d, 0, 0);
+  const p10 = projectPointWithMatrix3d(affine.rawMatrix3d, layoutW, 0);
+  const p01 = projectPointWithMatrix3d(affine.rawMatrix3d, 0, layoutH);
+  const p11 = projectPointWithMatrix3d(affine.rawMatrix3d, layoutW, layoutH);
+  if (!p00 || !p10 || !p01 || !p11) {
+    return null;
+  }
+
+  const xs = [p00.x, p10.x, p01.x, p11.x];
+  const ys = [p00.y, p10.y, p01.y, p11.y];
+  const minX = Math.min(...xs);
+  const minY = Math.min(...ys);
+  const offsetX = boxX - minX;
+  const offsetY = boxY - minY;
+
+  const a = (p10.x - p00.x) / layoutW;
+  const b = (p10.y - p00.y) / layoutW;
+  const c = (p01.x - p00.x) / layoutH;
+  const d = (p01.y - p00.y) / layoutH;
+  const e = offsetX + p00.x;
+  const f = offsetY + p00.y;
+
+  if (![a, b, c, d, e, f].every((value) => Number.isFinite(value))) {
+    return null;
+  }
+
+  return {
+    a,
+    b,
+    c,
+    d,
+    e,
+    f,
+    perspectiveApproximation: true,
   };
 }
 
@@ -753,54 +835,170 @@ function buildDuplicateMaskLayerEntries(
   return entries;
 }
 
+function selectPrimaryBackgroundLayer(template) {
+  const layers = Array.isArray(template?.layers) ? template.layers : [];
+  if (layers.length === 0) {
+    return null;
+  }
+
+  let best = null;
+  let bestScore = Number.NEGATIVE_INFINITY;
+
+  for (const [index, layer] of layers.entries()) {
+    const rect = layer?.rect || {};
+    const width = Math.max(0, toFiniteNumber(rect.width, 0));
+    const height = Math.max(0, toFiniteNumber(rect.height, 0));
+    const area = width * height;
+    if (area <= 0) {
+      continue;
+    }
+
+    const backgroundColor = normalizeSvgColor(layer?.backgroundColor);
+    const backgroundImage = String(layer?.backgroundImage || "").trim();
+    const hasGradient = /gradient\(/i.test(backgroundImage);
+    const hasBackground = Boolean(backgroundColor || hasGradient);
+    if (!hasBackground) {
+      continue;
+    }
+
+    const role = String(layer?.role || "").toLowerCase();
+    let score = area;
+
+    if (hasGradient) {
+      score += 2_500_000;
+    }
+    if (role === "root") {
+      score += 900_000;
+    } else if (role === "background") {
+      score += 450_000;
+    }
+
+    if (!best || score > bestScore) {
+      best = { layer, index, backgroundColor, backgroundImage, hasGradient };
+      bestScore = score;
+    }
+  }
+
+  return best;
+}
+
+function buildBackgroundLayerEntry(template) {
+  const selected = selectPrimaryBackgroundLayer(template);
+  if (!selected) {
+    return null;
+  }
+
+  const { width: canvasWidth, height: canvasHeight } = resolveTemplateCanvasSize(template);
+  const contentBounds = template?.canvas?.contentBounds || {};
+  const rawOffsetX = toFiniteNumber(contentBounds.x, 0);
+  const rawOffsetY = toFiniteNumber(contentBounds.y, 0);
+  const offsetX = rawOffsetX > 0 ? rawOffsetX : 0;
+  const offsetY = rawOffsetY > 0 ? rawOffsetY : 0;
+  const rect = selected.layer?.rect || {};
+  const x = toFiniteNumber(rect.x, 0) - offsetX;
+  const y = toFiniteNumber(rect.y, 0) - offsetY;
+  const w = Math.max(1, toFiniteNumber(rect.width, canvasWidth));
+  const h = Math.max(1, toFiniteNumber(rect.height, canvasHeight));
+
+  const defs = [];
+  const gradientFill = selected.hasGradient
+    ? buildGradientFill(selected.backgroundImage, defs, "background_layer")
+    : "";
+  const fill = gradientFill || selected.backgroundColor || "#111111";
+  if (!fill) {
+    return null;
+  }
+
+  const { rx, ry } = extractRadius(selected.layer?.borderRadius, w, h, {
+    allowLarge: true,
+  });
+  const radiusAttrs = rx > 0 || ry > 0 ? ` rx="${rx}" ry="${ry}"` : "";
+  const opacity = Math.max(0, Math.min(1, toFiniteNumber(selected.layer?.opacity, 1)));
+  const opacityAttr = opacity < 1 ? ` opacity="${opacity}"` : "";
+
+  const svgText = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${canvasWidth}" height="${canvasHeight}" viewBox="0 0 ${canvasWidth} ${canvasHeight}">`,
+    defs.length > 0 ? `<defs>${defs.join("")}</defs>` : "",
+    `<rect x="${x}" y="${y}" width="${w}" height="${h}"${radiusAttrs}${opacityAttr} fill="${escapeXml(fill)}" />`,
+    "</svg>",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const encoder = new TextEncoder();
+  return {
+    name: "00_fons.svg",
+    bytes: new Uint8Array(encoder.encode(svgText)),
+  };
+}
+
 function extractGradientColors(backgroundImageValue) {
   const value = String(backgroundImageValue || "").trim();
   if (!value) {
     return [];
   }
 
-  const matches = value.match(
-    /#[0-9a-fA-F]{3,8}\b|rgba?\([^)]+\)|hsla?\([^)]+\)|\b[a-zA-Z]+\b/g,
-  );
+  const matches = value.match(/#[0-9a-fA-F]{3,8}\b|rgba?\([^()]+\)|hsla?\([^()]+\)/g);
   if (!matches) {
     return [];
   }
 
-  const blacklisted = new Set([
-    "linear-gradient",
-    "radial-gradient",
-    "circle",
-    "ellipse",
-    "closest-side",
-    "closest-corner",
-    "farthest-side",
-    "farthest-corner",
-    "at",
-    "to",
-    "top",
-    "right",
-    "bottom",
-    "left",
-    "center",
-    "deg",
-  ]);
-
   return matches
     .map((token) => token.trim())
-    .filter((token) => {
-      if (!token) {
-        return false;
-      }
-      const normalized = token.toLowerCase();
-      if (blacklisted.has(normalized)) {
-        return false;
-      }
-      if (/^\d/.test(normalized)) {
-        return false;
-      }
-      return true;
-    })
+    .filter(Boolean)
     .slice(0, 6);
+}
+
+function normalizeGradientVector(dx, dy) {
+  const length = Math.hypot(dx, dy);
+  if (!Number.isFinite(length) || length <= 0) {
+    return { dx: 0, dy: 1 };
+  }
+  return { dx: dx / length, dy: dy / length };
+}
+
+function getLinearGradientEndpoints(backgroundImageValue) {
+  const raw = String(backgroundImageValue || "");
+  const value = raw.toLowerCase();
+
+  let dx = 0;
+  let dy = 1;
+
+  const keywordMatch = value.match(/linear-gradient\(\s*to\s+([a-z\s-]+?)\s*,/i);
+  if (keywordMatch?.[1]) {
+    const directionTokens = keywordMatch[1].trim();
+    const hasTop = directionTokens.includes("top");
+    const hasBottom = directionTokens.includes("bottom");
+    const hasLeft = directionTokens.includes("left");
+    const hasRight = directionTokens.includes("right");
+
+    dx = hasRight ? 1 : hasLeft ? -1 : 0;
+    dy = hasBottom ? 1 : hasTop ? -1 : 0;
+  } else {
+    const angleMatch = value.match(/linear-gradient\(\s*([+-]?\d*\.?\d+)deg\s*,/i);
+    if (angleMatch?.[1]) {
+      const cssAngleDeg = Number.parseFloat(angleMatch[1]);
+      if (Number.isFinite(cssAngleDeg)) {
+        const radians = (cssAngleDeg * Math.PI) / 180;
+        dx = Math.sin(radians);
+        dy = -Math.cos(radians);
+      }
+    }
+  }
+
+  const normalized = normalizeGradientVector(dx, dy);
+  const x1 = 50 - normalized.dx * 50;
+  const y1 = 50 - normalized.dy * 50;
+  const x2 = 50 + normalized.dx * 50;
+  const y2 = 50 + normalized.dy * 50;
+
+  return {
+    x1: `${x1.toFixed(3).replace(/\.?0+$/, "")}%`,
+    y1: `${y1.toFixed(3).replace(/\.?0+$/, "")}%`,
+    x2: `${x2.toFixed(3).replace(/\.?0+$/, "")}%`,
+    y2: `${y2.toFixed(3).replace(/\.?0+$/, "")}%`,
+  };
 }
 
 function buildGradientFill(backgroundImageValue, defs, idPrefix) {
@@ -826,7 +1024,10 @@ function buildGradientFill(backgroundImageValue, defs, idPrefix) {
   if (/radial-gradient\(/i.test(value)) {
     defs.push(`<radialGradient id="${gradientId}" cx="50%" cy="50%" r="70%">${stops}</radialGradient>`);
   } else {
-    defs.push(`<linearGradient id="${gradientId}" x1="0%" y1="0%" x2="100%" y2="0%">${stops}</linearGradient>`);
+    const direction = getLinearGradientEndpoints(value);
+    defs.push(
+      `<linearGradient id="${gradientId}" x1="${direction.x1}" y1="${direction.y1}" x2="${direction.x2}" y2="${direction.y2}">${stops}</linearGradient>`,
+    );
   }
 
   return `url(#${gradientId})`;
@@ -1438,28 +1639,48 @@ function buildTemplateSvgText(
       let imageH = h;
 
       if (affine && layoutW > 0 && layoutH > 0) {
-        const dxCandidates = [
-          0,
-          affine.a * layoutW,
-          affine.c * layoutH,
-          affine.a * layoutW + affine.c * layoutH,
-        ];
-        const dyCandidates = [
-          0,
-          affine.b * layoutW,
-          affine.d * layoutH,
-          affine.b * layoutW + affine.d * layoutH,
-        ];
-        const minDx = Math.min(...dxCandidates);
-        const minDy = Math.min(...dyCandidates);
-        const tx = layerX - minDx;
-        const ty = layerY - minDy;
+        const perspectiveApprox = affine.perspective
+          ? approximateAffineFromPerspective(affine, layoutW, layoutH, layerX, layerY)
+          : null;
+
+        let matrixA = affine.a;
+        let matrixB = affine.b;
+        let matrixC = affine.c;
+        let matrixD = affine.d;
+        let tx;
+        let ty;
+
+        if (perspectiveApprox) {
+          matrixA = perspectiveApprox.a;
+          matrixB = perspectiveApprox.b;
+          matrixC = perspectiveApprox.c;
+          matrixD = perspectiveApprox.d;
+          tx = perspectiveApprox.e;
+          ty = perspectiveApprox.f;
+        } else {
+          const dxCandidates = [
+            0,
+            matrixA * layoutW,
+            matrixC * layoutH,
+            matrixA * layoutW + matrixC * layoutH,
+          ];
+          const dyCandidates = [
+            0,
+            matrixB * layoutW,
+            matrixD * layoutH,
+            matrixB * layoutW + matrixD * layoutH,
+          ];
+          const minDx = Math.min(...dxCandidates);
+          const minDy = Math.min(...dyCandidates);
+          tx = layerX - minDx;
+          ty = layerY - minDy;
+        }
 
         imageX = 0;
         imageY = 0;
         imageW = layoutW;
         imageH = layoutH;
-        imageTransformAttr = ` transform="matrix(${affine.a} ${affine.b} ${affine.c} ${affine.d} ${tx} ${ty})"`;
+        imageTransformAttr = ` transform="matrix(${matrixA} ${matrixB} ${matrixC} ${matrixD} ${tx} ${ty})"`;
       }
 
       const { rx, ry } = extractRadius(layer?.borderRadius, w, h, {
@@ -1646,6 +1867,7 @@ function buildTemplateArchiveEntries(
     sourceToFilenameMap,
     sourceToSvgTextMap,
   );
+  const backgroundLayerEntry = buildBackgroundLayerEntry(normalizedTemplate);
   const duplicateMaskLayerEntries = buildDuplicateMaskLayerEntries(
     normalizedTemplate,
     sourceToFilenameMap,
@@ -1661,6 +1883,7 @@ function buildTemplateArchiveEntries(
       name: "plantilla_mockup.svg",
       bytes: new Uint8Array(encoder.encode(templateSvg)),
     },
+    ...(backgroundLayerEntry ? [backgroundLayerEntry] : []),
     ...duplicateMaskLayerEntries,
   ];
 
